@@ -1,0 +1,19 @@
+This package uses Fuego as the Go game engine
+
+To install Fuego and get the python wrapper working:
+
+1) Download Fuego from SourceForge: http://sourceforge.net/projects/fuego/
+
+2) unpack archive and move into feature-learning/go/
+
+3) intall: ./configure; make; make install
+
+4) run ./install.sh in feature-learning/go/
+
+Notes: will need gcc, boost, and cython
+
+To get boost on MacOS using homebrew: brew install boost
+b/c homebrew uses a newer version of boost than fuego was written for
+change all references in the code for native_file_string() to native()
+and remove all constructors using boost::filesystem::native
+http://stackoverflow.com/questions/5564767/boostfilesystem-updating-from-1-34-1-to-current
