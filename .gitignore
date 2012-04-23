@@ -1,0 +1,11 @@
+*.pyc
+*.pyo
+.*.swp
+*.aux
+*.bbl
+*.blg
+*.log
+*.o
+*.a
+graclus1.2/graclus
+dropbox
