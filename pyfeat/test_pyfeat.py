@@ -88,9 +88,10 @@ def test_vw_stream(num_examples = 20, path_vw = '/usr/local/bin/vw' ):
     examples = []
     for i in xrange(num_examples):
 
-        grid = numpy.round(2*numpy.random.random((9,9))-1)
+        grid = numpy.round(2*numpy.random.random((9,9))) # 0,1,2
 
-        active_set = pyfeat.feature_maps.rect_template(grid, num_bins = 10**5)
+        #active_set = pyfeat.go.hash_maps.rect_template(grid, py_num_bins = 10**5)
+        active_set = pyfeat.go.py_hash_maps.rect_template(grid, num_bins = 10**5)
         
         if i >= num_examples*(3/4.):
             value = None
@@ -120,8 +121,7 @@ def test_vw_stream(num_examples = 20, path_vw = '/usr/local/bin/vw' ):
         print 'prediction for %s is %s' % (id, value)
 
 def test_vw_file( path_vw = '/usr/local/bin/vw'):
-
-    
+ 
     vw = vowpal.Vowpal(path_vw, './vw.%s', {'--passes' : '200' })
     preds = vw.predict_from_file('vw.file.txt')
     

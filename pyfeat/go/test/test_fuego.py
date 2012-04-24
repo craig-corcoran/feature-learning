@@ -69,11 +69,11 @@ def test_fuego_board_score_simple_endgame():
             (player, next_player) = (next_player, player)
 
             if move is None:
+                board.play(-1,-1)
                 break
             else:
                 #print move, player
                 (row, column) = move
-                board
                 board.play(row, column)
 
         scores.append(board.score_simple_endgame())

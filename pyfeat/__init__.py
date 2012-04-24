@@ -8,8 +8,8 @@ from .util import (
     annotations,
     )
 
-from . import feature_maps
 from . import models
+
 #from . import graclus
 #from . import tictac
 #from . import spectral

@@ -1,4 +1,7 @@
 from go import *
+from . import hash_maps
+from . import py_hash_maps
+from . import feature_maps
 
 try:
     from fuego import *
