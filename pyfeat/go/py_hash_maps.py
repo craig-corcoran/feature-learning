@@ -1,5 +1,6 @@
 import numpy
-import hashlib
+import random
+import mmh3
 
 # TODO keep collision count?
 # TODO how to handle rotational/reflective symmetries?
@@ -46,7 +47,7 @@ def rect_template(grid, edge_max = 9, size = 9, num_bins = 2**18,
 
                     if pos_invariant:
                         # calculate invariant hash
-                        inv_index = inv_hash(window.flatten(), p, q)
+                        inv_index = inv_hash(window, p, q, num_bins)
 
                         full_list.append(inv_index) # db
                         if not num_bins == None:
@@ -65,8 +66,8 @@ def rect_template(grid, edge_max = 9, size = 9, num_bins = 2**18,
                     if pos_dependent:
                         dep_grid = numpy.zeros((size,size))
                         dep_grid[i:i+p, j:j+q] = window
-                        dep_grid = dep_grid.flatten()
-                        dep_index = dep_hash(dep_grid, p, q, i, j)
+                        
+                        dep_index = dep_hash(dep_grid, p, q, i, j, num_bins) 
 
                         full_list.append(dep_index) # db
                         if not num_bins == None:    
@@ -95,14 +96,9 @@ def rect_template(grid, edge_max = 9, size = 9, num_bins = 2**18,
         print 'returning list' 
         return active_feats.keys()
                     
-def inv_hash(grid, p, q):
-    # hashlib helps with collisions
-    return int(hashlib.md5(str(grid) + str.format('{p}{q}',p=p,q=q)).hexdigest(),16) 
-    #return hash(str(grid) + str.format('{p}{q}',p=p,q=q))
-    
+def inv_hash(grid, p, q, num_bins):
+    return mmh3.hash64(''.join([grid.tostring(),str(p),str(q)]))[0] % num_bins
 
-def dep_hash(grid, p, q, i, j):
-    return int(hashlib.md5(str(grid) + str.format('{p}{q}{i}{j}',p=p,q=q,i=i,j=j)).hexdigest(),16)
-    #return hash(str(grid) + str.format('{p}{q}{i}{j}',p=p,q=q,i=i,j=j))
-    
+def dep_hash(grid, p, q, i, j, num_bins):
+    return mmh3.hash64(''.join([grid.tostring(),str(p),str(q),str(i),str(j)]))[0] % num_bins    
 

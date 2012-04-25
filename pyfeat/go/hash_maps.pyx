@@ -1,7 +1,7 @@
 # cython: profile=True
-import numpy
-import hashlib
+import numpy 
 import random
+import mmh3
 
 cimport cython
 cimport numpy
@@ -32,17 +32,6 @@ def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
         returns a dictionary of (feature index, count) or list of nonzero indices 
         depending on the return_count switch.
     '''
-
-    cdef numpy.ndarray[numpy.uint32_t, ndim = 1] primes = numpy.array([293, 43,
-    349, 41, 233, 883, 379, 1039, 619, 823, 514229, 613, 97, 1597, 337, 37,
-    19577194573, 241, 683, 409, 281, 211, 149, 907, 761, 463, 29, 383, 433,
-    251, 167, 31, 113, 127, 5741, 780291637, 23, 863, 103, 163, 577, 709,
-    3276509, 653, 94418953, 317, 2971215073, 563, 2897, 487, 179, 631, 991, 73,
-    25209506681, 96557, 2922509, 28657, 79, 33461, 787, 673, 1405695061, 277,
-    321534781, 67, 727, 2, 7, 151, 997, 7561, 1093, 109, 739, 617, 239, 3, 107,
-    331, 157, 191, 263, 139, 193, 367, 937, 313, 13, 5, 426389, 89, 421, 643,
-    19, 601, 43261, 17, 769, 1009, 397, 1686049, 283, 223, 311, 433494437, 541,
-    1033, 881, 307], numpy.uint32)
 
     cdef unsigned int size = py_size
     cdef unsigned long long int num_bins = py_num_bins
@@ -95,7 +84,7 @@ def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
 
                     if pos_invariant:
                         # calculate invariant hash
-                        index = inv_hash(window, p, q, num_bins, primes) # % num_bins
+                        index = inv_hash(window, p, q, num_bins) # % num_bins
                             
                         if not active_feats.has_key(index):
                             active_feats[index] = 1
@@ -105,7 +94,7 @@ def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
 
                     if pos_dependent:
                         
-                        index = dep_hash(dep_grid, p, q, i, j, num_bins, primes) # % num_bins
+                        index = dep_hash(dep_grid, p, q, i, j, num_bins) # % num_bins
 
                         if not active_feats.has_key(index):
                             active_feats[index] = 1
@@ -114,59 +103,22 @@ def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
                             # position dependent features, must be hash fn and/or col w/ invariant features
                             active_feats[index] += 1
 
-    # TODO change to logger
-    #print 'size of full active set: ', len(active_feats)   
-    #print 'sum of counts: ', sum(active_feats.values())
     
     # returns either a dictionary of (indices, counts) or a list of indices for 
     # binary features
     if return_count:
-        print 'returning dictionary'
         return active_feats
-    else:
-        print 'returning list' 
+    else: 
         return active_feats.keys()
 
 
 def inv_hash(numpy.ndarray[numpy.uint8_t, ndim = 2] grid, unsigned int p, 
-        unsigned int q, unsigned long long num_bins, 
-        numpy.ndarray[numpy.uint32_t, ndim = 1] primes):
+        unsigned int q, unsigned long long num_bins):
 
-    cdef unsigned int i
-    cdef unsigned int j
-    cdef unsigned long long hash_index = 0
-    cdef unsigned int rows = grid.shape[0]
-    cdef unsigned int cols = grid.shape[1]
-
-    for i in xrange(rows):
-        for j in xrange(cols):
-           hash_index += grid[i,j]*primes[i*cols + j]
-
-    hash_index += p*primes[-1]
-    hash_index += q*primes[-2]
-
-    return hash_index % num_bins
+    return mmh3.hash64(''.join([grid.tostring(), str(p), str(q)]))[0] % num_bins
     
 def dep_hash(numpy.ndarray[numpy.uint8_t, ndim = 2] grid, unsigned int p,
-        unsigned int q, unsigned int i, unsigned int j, unsigned long long num_bins,
-        numpy.ndarray[numpy.uint32_t, ndim = 1] primes):
-
-    cdef unsigned int r
-    cdef unsigned int c
-    cdef unsigned long long hash_index = 0
-    cdef unsigned int rows = grid.shape[0]
-    cdef unsigned int cols = grid.shape[1]
-
-    for r in xrange(rows):
-        for c in xrange(cols):
-           hash_index += grid[i,j]*primes[i*cols + j]
-
-    hash_index += p*primes[-1]
-    hash_index += q*primes[-2]
-    hash_index += i*primes[-3]
-    hash_index += j*primes[-4]
-
-    return hash_index % num_bins
-    
-
+        unsigned int q, unsigned int i, unsigned int j, unsigned long long num_bins):
+        
+    return mmh3.hash64(''.join([grid.tostring(), str(p), str(q), str(i), str(j)]))[0] % num_bins
 

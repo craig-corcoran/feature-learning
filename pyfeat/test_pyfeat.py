@@ -91,7 +91,7 @@ def test_vw_stream(num_examples = 20, path_vw = '/usr/local/bin/vw' ):
         grid = numpy.round(2*numpy.random.random((9,9))) # 0,1,2
 
         #active_set = pyfeat.go.hash_maps.rect_template(grid, py_num_bins = 10**5)
-        active_set = pyfeat.go.py_hash_maps.rect_template(grid, num_bins = 10**5)
+        active_set = pyfeat.go.py_hash_maps.rect_template(grid)
         
         if i >= num_examples*(3/4.):
             value = None
