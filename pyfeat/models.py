@@ -97,3 +97,54 @@ if __name__ == '__main__':
     for (instance, prediction) in SimpleModel('myexample').train(instances).predict(instances):
         print prediction, instance
 
+#######
+    """
+        Predicting from an ExampleStream.  An ExampleStream basically
+        writes an input file for you from VowpalExample objects.
+        All training examples (value != None) must appear before test examples.
+    """
+    stream = vowpal.ExampleStream('vw.stream.txt')
+    examples = []
+    for i in xrange(num_examples):
+
+        grid = numpy.round(2*numpy.random.random((9,9))) # 0,1,2
+
+        #active_set = pyfeat.go.hash_maps.rect_template(grid, py_num_bins = 10**5)
+        active_set = pyfeat.go.py_hash_maps.rect_template(grid)
+        
+        if i >= num_examples*(3/4.):
+            value = None
+        else:
+            value = numpy.random.random()
+
+        # {'temp_feats' : {32 : None, 12: None, ..., idx: None} } for count = False (default)
+        # {'temp_feats' : {32 : 2, 12 : 1 , ..., idx: count} } for count=True
+        all_sections = dict([ ( 'temp_feats', dict( 
+                        zip(active_set, [None]*len(active_set))) )
+                        ])
+        #all_sections = dict(zip(active_set, [None]*len(active_set)))
+                        
+
+        ex = vowpal.VowpalExample(i, value)
+
+        for (namespace, section) in all_sections.items():
+            ex.add_section(namespace, section)
+        stream.add_example(ex)
+    
+    print 'running through examples in vw'
+    vw = vowpal.Vowpal(path_vw, './vw.%s', {'--passes' : '200' })
+    preds = vw.predict_from_example_stream(stream)
+    
+    print 'print values from predictions: ', preds
+    for (id, value) in preds:
+        print 'prediction for %s is %s' % (id, value)
+
+#def test_vw_file( path_vw = '/usr/local/bin/vw'):
+ 
+    #vw = vowpal.Vowpal(path_vw, './vw.%s', {'--passes' : '200' })
+    #preds = vw.predict_from_file('vw.file.txt')
+    
+    #print 'print values from predictions: ', preds
+    #for (id, value) in preds:
+        #print 'prediction for %s is %s' % (id, value)
+

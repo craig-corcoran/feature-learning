@@ -60,7 +60,7 @@ def test_fuego_board_score_simple_endgame():
     for i in xrange(64):
         board = pyfeat.go.FuegoBoard()
         player = pyfeat.go.FuegoCapturePlayer(board)
-        next_player = pyfeat.go.FuegoCapturePlayer(board)
+        next_player = pyfeat.go.FuegoRandomPlayer(board)
         
         while True:
             move = player.generate_move(player = player_num);

@@ -6,10 +6,8 @@ import mmh3
 cimport cython
 cimport numpy
 
-# TODO keep collision count?
 # TODO how to handle rotational/reflective symmetries?
-# TODO why are number of collisions sensitive to 1e7 vs 10**7 and adding 1
-def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
+def rect_template(py_grid, edge_max = 9, py_size = 9, num_bins = 2**18,
         pos_invariant = True, pos_dependent = True, return_count = False):
     
     ''' 
@@ -34,7 +32,7 @@ def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
     '''
 
     cdef unsigned int size = py_size
-    cdef unsigned long long int num_bins = py_num_bins
+    cdef unsigned long long int n_bins = num_bins
 
     py_grid = numpy.reshape(py_grid,(9,9))
     print py_grid.shape
@@ -84,7 +82,7 @@ def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
 
                     if pos_invariant:
                         # calculate invariant hash
-                        index = inv_hash(window, p, q, num_bins) # % num_bins
+                        index = inv_hash(window, p, q, n_bins) # % n_bins
                             
                         if not active_feats.has_key(index):
                             active_feats[index] = 1
@@ -94,7 +92,7 @@ def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
 
                     if pos_dependent:
                         
-                        index = dep_hash(dep_grid, p, q, i, j, num_bins) # % num_bins
+                        index = dep_hash(dep_grid, p, q, i, j, n_bins) # % n_bins
 
                         if not active_feats.has_key(index):
                             active_feats[index] = 1
@@ -114,7 +112,7 @@ def rect_template(py_grid, edge_max = 9, py_size = 9, py_num_bins = 2**18,
 
 def inv_hash(numpy.ndarray[numpy.uint8_t, ndim = 2] grid, unsigned int p, 
         unsigned int q, unsigned long long num_bins):
-
+    
     return mmh3.hash64(''.join([grid.tostring(), str(p), str(q)]))[0] % num_bins
     
 def dep_hash(numpy.ndarray[numpy.uint8_t, ndim = 2] grid, unsigned int p,

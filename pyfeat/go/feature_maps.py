@@ -19,7 +19,7 @@ class RectTemplateMap:
         
         if board.__class__ is pyfeat.go.BoardState:
             board = board.grid
-        elif board.__class is not numpy.ndarray:
+        elif board.__class__ is not numpy.ndarray:
             assert False
 
         return hash_maps.rect_template(board, self.edge_max, self.size, self.num_bins,

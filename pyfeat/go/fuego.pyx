@@ -106,7 +106,7 @@ cpdef FuegoBoard replay_moves(moves, FuegoBoard board = None):
     return board
 
 @cython.infer_types(True)
-def estimate_value(FuegoBoard board, int rollouts = 256, FuegoPlayer player = None, FuegoPlayer opponent = None, winrate=True):
+def estimate_value(FuegoBoard board, int rollouts = 256, FuegoPlayer player = None, FuegoPlayer opponent = None, win_rew = 1, lose_rew = -1):
     """Estimate the value of a position."""
 
     cdef int passed
@@ -116,7 +116,7 @@ def estimate_value(FuegoBoard board, int rollouts = 256, FuegoPlayer player = No
         player = FuegoAveragePlayer(board)
 
     if opponent == None:
-        opponent = FuegoRandomPlayer(board)
+        opponent = FuegoAveragePlayer(board)
 
     board.take_snapshot()
 
@@ -125,7 +125,7 @@ def estimate_value(FuegoBoard board, int rollouts = 256, FuegoPlayer player = No
 
         passed = 0
         while passed < 2:
-            if board._get_to_play() == 0: 
+            if board._get_to_play() == 1: # TODO should this be 0? was set prev
                 move = player._generate_move()
             else:
                 move = opponent._generate_move()                
@@ -141,10 +141,7 @@ def estimate_value(FuegoBoard board, int rollouts = 256, FuegoPlayer player = No
         
         score = board.score_simple_endgame()
         
-        if winrate: # TODO make this -1, 1?
-            value += 0 if score > 0 else 1 # should be > or < (currently: pos score good for white)
-        else:
-            value += score 
+        value += lose_rew if score > 0 else win_rew # should be > or < (currently: pos score good for white)?
 
     return value / rollouts
 
@@ -287,10 +284,7 @@ cdef class FuegoPlayer(object):
         
         move = self._generate_move(seconds, player)
 
-        if move.r == -1:
-            return None
-        else:
-            return (move.r, move.c)
+        return (move.r, move.c) # (-1,-1) returned for pass
 
     cdef RowColumn _generate_move(self, double seconds = 1e6, int player = -1):
         """Generate a move to play."""
@@ -299,11 +293,8 @@ cdef class FuegoPlayer(object):
 
         if player == -1:
             black_white = _player_to_black_white(player) # self._board._board.ToPlay()
-        else:
+        elif player == 1:
             black_white = _player_to_black_white(player)
-        
-        print 'black white: ', black_white
-        print 'player number: ', player
 
         cdef fuego_c.SgTimeRecord time = fuego_c.SgTimeRecord(True, seconds)
         cdef fuego_c.SgPoint point = self._player.GenMove(time, black_white)

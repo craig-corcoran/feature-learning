@@ -2,12 +2,11 @@ import numpy
 import random
 import mmh3
 
-# TODO keep collision count?
 # TODO how to handle rotational/reflective symmetries?
-# TODO why are number of collisions sensitive to 1e7 vs 10**7 and adding 1
 def rect_template(grid, edge_max = 9, size = 9, num_bins = 2**18,
-        pos_invariant = True, pos_dependent = True, count = False):
+        pos_invariant = True, pos_dependent = True, return_count = False):
     ''' 
+        cython version exists, this is used primarily for testing collisions
 
         calculates the sparse feature mapping for all rectangular templates up
         to edge_max by edge_max. Can evaluate both position dependent and position
@@ -89,7 +88,7 @@ def rect_template(grid, edge_max = 9, size = 9, num_bins = 2**18,
     
     # returns either a dictionary of (indices, counts) or a list of indices for 
     # binary features
-    if count:
+    if return_count:
         print 'returning dictionary'
         return active_feats
     else:
