@@ -23,20 +23,17 @@ def find_values(game, rollouts, player, opponent, error_thresh):
 
     return numpy.array(values)
 
-def gen_game(player_class = None, opponent_class = None, passes = 1):
+def gen_game(player = None, opponent = None, passes = 1):
     ''' plays a game with player v opponent and returns a Game object '''
 
     board = pyfeat.go.FuegoBoard()
 
-    if player_class == None:
-        player_class = pyfeat.go.FuegoAveragePlayer
+    if player == None:
+        player = pyfeat.go.FuegoAveragePlayer(board)
 
-    if opponent_class == None:
-        opponent_class = pyfeat.go.FuegoAveragePlayer
-
-    player = player_class.__init__(board)
-    opponent = opponent_class.__init__(board)
-    
+    if opponent == None:
+        opponent = pyfeat.go.FuegoAveragePlayer(board)
+ 
     moves = numpy.zeros((0,3))
     grids = numpy.zeros((0,9,9))
     passed = 0
@@ -80,22 +77,16 @@ def gen_game(player_class = None, opponent_class = None, passes = 1):
     workers = ("number of Condor workers", "option", "w", int),
     replacement = ("boolean flag for keeping multiple copies of the same board", "option", None, bool)
     )
-def main(out_path, num_boards = 100, min_rollouts = 256, workers = 0, replacement = True,
-        player_class = None, opponent_class = None, error_thresh = 0.0002):
+def main(out_path, num_boards = 1000, min_rollouts = 256, workers = 0, replacement = True,
+        player = None, opponent = None, error_thresh = 0.0002):
 
     logger.info("generating state, value pairs using samples from given policy") 
 
-    if player_class == None:
-        player = pyfeat.go.FuegoUctPlayer
-
-    if opponent_class == None:
-        opponent = pyfeat.go.FuegoUctPlayer
-    
     games = [] 
     grids = numpy.zeros((0,9,9), numpy.int8)
     boards_seen = set()
     while (grids.shape[0] < num_boards) if replacement else (len(boards_seen) < num_boards):
-        new_game = gen_game(player_class = player_class, opponent_class = opponent_class)
+        new_game = gen_game()
         games.append(new_game)
         boards_seen = boards_seen.union(set(map(pyfeat.go.BoardState, new_game.grids)))
         grids = numpy.vstack((grids,new_game.grids))
