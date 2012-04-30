@@ -3,6 +3,8 @@ import numpy
 import pyfeat
 
 def test_fuego_board_basic():
+    print 'testing board basics'
+
     board = pyfeat.go.FuegoBoard()
 
     nose.tools.assert_equal(board.size, 9)
@@ -31,6 +33,7 @@ def test_fuego_board_basic():
     nose.tools.assert_true(numpy.all(board.grid == 0))
 
 def test_fuego_moves_to_grids():
+    print 'testing moves to grids'
     moves = [
         (1, 4, 4),
         (-1, 3, 3),
@@ -54,29 +57,57 @@ def test_fuego_random_player_basic():
     nose.tools.assert_not_equal(moves_a, moves_b)
 
 def test_fuego_board_score_simple_endgame():
+    print 'testing game'
     scores = []
     
-    player_num = 1;
     for i in xrange(64):
         board = pyfeat.go.FuegoBoard()
-        player = pyfeat.go.FuegoCapturePlayer(board)
+        player = pyfeat.go.FuegoAveragePlayer(board)
         next_player = pyfeat.go.FuegoRandomPlayer(board)
         
-        while True:
-            move = player.generate_move(player = player_num);
-            player_num = player_num*-1;
-
+        passed = 0
+        num_moves = 0
+        while passed < 1: 
+            # TODO why aren't suicides being caught? or what is going on when 
+            # you wait for two passes (scores switch sign, for example with 
+            # avg v rand)
+            move = player.generate_move();
             (player, next_player) = (next_player, player)
 
-            if move is None:
-                board.play(-1,-1)
-                break
+            if move == (-1,-1):
+                passed += 1
+                #print player.__class__
+                #print board.grid
+                #print num_moves
             else:
-                #print move, player
-                (row, column) = move
-                board.play(row, column)
+                passed = 0
+
+            if (numpy.zeros((9,9),numpy.int8) == board.grid).all() :
+                assert num_moves == 0
+
+            #print board.grid
+            #print move, player
+            (row, column) = move
+            board.play(row, column)
+            
+            num_moves += 1
+            if num_moves >= 1000:
+                break
+            
+            if board.to_play == 1:
+                assert player.__class__ == pyfeat.go.FuegoAveragePlayer
+            elif board.to_play == -1:
+                assert player.__class__ == pyfeat.go.FuegoRandomPlayer
+
+        print 'final board: ', board.grid    
+
+        print 'number of moves in last game: ', num_moves
 
         scores.append(board.score_simple_endgame())
 
-    nose.tools.assert_true(numpy.mean(scores) < 0.0)
+    print scores
+    nose.tools.assert_true(numpy.mean(scores) > 0.0)
+
+if __name__ == "__main__":
+    test_fuego_board_score_simple_endgame()
 

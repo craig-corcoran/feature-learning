@@ -77,6 +77,8 @@ def test_template_maps():
 
     assert total_counts == total_count1 == total_count2
 
+
+
 def test_vw_stream(num_examples = 20, path_vw = '/usr/local/bin/vw' ):
     """
         Predicting from an ExampleStream.  An ExampleStream basically
@@ -87,10 +89,10 @@ def test_vw_stream(num_examples = 20, path_vw = '/usr/local/bin/vw' ):
     examples = []
     for i in xrange(num_examples):
 
-        grid = numpy.round(2*numpy.random.random((9,9))) # 0,1,2
+        grid = numpy.round(2*numpy.random.random((9,9))-1) # 0,1,2
 
-        #active_set = pyfeat.go.hash_maps.rect_template(grid, py_num_bins = 10**5)
-        active_set = pyfeat.go.py_hash_maps.rect_template(grid)
+        active_set = pyfeat.go.hash_maps.rect_template(grid, num_bins = 10**5)
+        #active_set = pyfeat.go.py_hash_maps.rect_template(grid)
         
         if i >= num_examples*(3/4.):
             value = None

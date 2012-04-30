@@ -1,5 +1,5 @@
-import numpy
 import pyfeat
+import numpy
 
 cimport numpy
 cimport cython
@@ -106,11 +106,16 @@ cpdef FuegoBoard replay_moves(moves, FuegoBoard board = None):
     return board
 
 @cython.infer_types(True)
-def estimate_value(FuegoBoard board, int rollouts = 256, FuegoPlayer player = None, FuegoPlayer opponent = None, win_rew = 1, lose_rew = -1):
+def estimate_value(FuegoBoard board, int min_rollouts = 64, 
+                FuegoPlayer player = None, FuegoPlayer opponent = None, 
+                float error_thresh = 0.0002, int win_rew = 1, int lose_rew = 0):
+
     """Estimate the value of a position."""
 
     cdef int passed
-    cdef double value = 0.0
+    cdef double mean = 0.0
+    cdef double variance = 0.0
+    cdef int reward
 
     if player == None:
         player = FuegoAveragePlayer(board)
@@ -120,30 +125,47 @@ def estimate_value(FuegoBoard board, int rollouts = 256, FuegoPlayer player = No
 
     board.take_snapshot()
 
-    for i in xrange(rollouts):
+    cdef float error_bound = 0.0
+    i = 0
+    while (error_bound > error_thresh) | (i < min_rollouts):
+           
         board.restore_snapshot()
-
+        
+        ## play game ##
         passed = 0
-        while passed < 2:
-            if board._get_to_play() == 1: # TODO should this be 0? was set prev
+        while passed < 1:
+            if board._get_to_play() == 1:
                 move = player._generate_move()
-            else:
+            elif board._get_to_play() == -1:
                 move = opponent._generate_move()                
+            else:
+                assert False
 
-            if move.r == -1:
+            if move.r == -1:        
                 passed += 1
-
-                continue
             else:
                 passed = 0
-
-                board.play(move.r, move.c)
+                
+            board.play(move.r,move.c)
         
         score = board.score_simple_endgame()
         
-        value += lose_rew if score > 0 else win_rew # should be > or < (currently: pos score good for white)?
+        reward = lose_rew if score < 0 else win_rew # should be > or < (currently: pos score good for black)?
+        ####
 
-    return value / rollouts
+        mean = (i*mean + reward) / float(i + 1)
+        variance = ( i*variance + (reward - mean)**2 ) / float(i + 1)
+    
+        error_bound = variance / (i + 1)
+
+        i += 1
+
+    #print 'estimated value: ', mean
+    #print 'estimated variance: ', variance
+    #print 'v*(1-mean) ~ var : ', mean*(1-mean)
+    #print 'number of games played: ', i
+
+    return mean
 
 
 cdef class FuegoBoard(object):
@@ -278,22 +300,19 @@ cdef class FuegoPlayer(object):
         if self._player != NULL:
             del self._player
 
-    def generate_move(self, double seconds = 1e6, int player = 0):
+    def generate_move(self, double seconds = 1e6, player = None):
         
-        #print 'player', player
-        
-        move = self._generate_move(seconds, player)
+        move = self._generate_move(player, seconds)
 
         return (move.r, move.c) # (-1,-1) returned for pass
 
-    cdef RowColumn _generate_move(self, double seconds = 1e6, int player = -1):
-        """Generate a move to play."""
+    cdef RowColumn _generate_move(self, player = None, double seconds = 1e6):
+        """ Generate a move to play. """
 
         cdef fuego_c.SgBlackWhite black_white
-
-        if player == -1:
-            black_white = _player_to_black_white(player) # self._board._board.ToPlay()
-        elif player == 1:
+        if player is None:
+            black_white = self._board._board.ToPlay()
+        else:
             black_white = _player_to_black_white(player)
 
         cdef fuego_c.SgTimeRecord time = fuego_c.SgTimeRecord(True, seconds)
