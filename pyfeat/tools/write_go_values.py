@@ -75,10 +75,12 @@ def gen_game(player = None, opponent = None, passes = 1):
     num_boards = ("number of boards to evaluate", "option", None, int),
     min_rollouts = ("min monte carlo rollouts to perform", "option", None, int),
     workers = ("number of Condor workers", "option", "w", int),
-    replacement = ("boolean flag for keeping multiple copies of the same board", "option", None, bool)
+    replacement = ("boolean flag for keeping multiple copies of the same board", "option", None, bool),
+    error_thresh = ("threshold for error in value estimate, more rollouts are performed if lower", "option", None, float)
+    # TODO how to input players?
     )
-def main(out_path, num_boards = 1000, min_rollouts = 256, workers = 0, replacement = True,
-        player = None, opponent = None, error_thresh = 0.0002):
+def main(out_path, num_boards = 10000, min_rollouts = 128, workers = 0, replacement = True,
+        player = None, opponent = None, error_thresh = 0.002):
 
     logger.info("generating state, value pairs using samples from given policy") 
 

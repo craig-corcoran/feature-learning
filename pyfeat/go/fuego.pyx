@@ -167,7 +167,9 @@ def estimate_value(FuegoBoard board, int min_rollouts = 64,
     #print 'estimated variance: ', variance
     #print 'v*(1-mean) ~ var : ', mean*(1-mean)
     #print 'number of games played: ', i
-
+    
+    logger.info('number of games played from this board: %i', i)
+    
     return mean
 
 
