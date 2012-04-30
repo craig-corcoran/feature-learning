@@ -110,7 +110,10 @@ def estimate_value(FuegoBoard board, int min_rollouts = 64,
                 FuegoPlayer player = None, FuegoPlayer opponent = None, 
                 float error_thresh = 0.0002, int win_rew = 1, int lose_rew = 0):
 
-    """Estimate the value of a position."""
+    """
+    Estimate the value of a position. play for at least min_rollouts games, 
+    then play until (sample variance / (i+1)) < error_thresh
+    """
 
     cdef int passed
     cdef double mean = 0.0
@@ -339,6 +342,10 @@ cdef class FuegoAveragePlayer(FuegoPlayer):
 cdef class FuegoCapturePlayer(FuegoPlayer):
     def __cinit__(self, FuegoBoard board):
         self._player = <fuego_c.GoPlayer*>new fuego_c.SpCapturePlayer(board._board[0])
+
+#cdef class FuegoUctPlayer(FuegoPlayer):
+    #def __cinit__(self, FuegoBoard board):
+        #self._player = <fuego_c.GoPlayer*>new fuego_c.GoUctPlayer(board._board[0])
 
 def _initialize_globals():
     """Configure defaults."""

@@ -27,6 +27,7 @@ distutils.core.setup(
                 'fuego/gouct',
                 'fuego/smartgame',
                 'fuego/simpleplayers',
+                'fuego/book',
                 numpy_include_dir(),
                 ],
             extra_objects = [

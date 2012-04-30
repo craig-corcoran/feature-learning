@@ -124,3 +124,7 @@ cdef extern from "SpSafePlayer.h":
     cdef cppclass SpSafePlayer:
         SpSafePlayer(GoBoard& board)
 
+#cdef extern from "GoUctPlayer.h":
+    #cdef cppclass GoUctPlayer:
+        #GoUctPlayer(GoBoard& board)
+

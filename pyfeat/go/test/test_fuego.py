@@ -57,7 +57,6 @@ def test_fuego_random_player_basic():
     nose.tools.assert_not_equal(moves_a, moves_b)
 
 def test_fuego_board_score_simple_endgame():
-    print 'testing game'
     scores = []
     
     for i in xrange(64):
@@ -76,17 +75,12 @@ def test_fuego_board_score_simple_endgame():
 
             if move == (-1,-1):
                 passed += 1
-                #print player.__class__
-                #print board.grid
-                #print num_moves
             else:
                 passed = 0
 
             if (numpy.zeros((9,9),numpy.int8) == board.grid).all() :
-                assert num_moves == 0
+                nose.tools.assert_true( num_moves == 0 )
 
-            #print board.grid
-            #print move, player
             (row, column) = move
             board.play(row, column)
             
@@ -95,17 +89,16 @@ def test_fuego_board_score_simple_endgame():
                 break
             
             if board.to_play == 1:
-                assert player.__class__ == pyfeat.go.FuegoAveragePlayer
+                nose.tools.assert_true(player.__class__ == pyfeat.go.FuegoAveragePlayer)
             elif board.to_play == -1:
-                assert player.__class__ == pyfeat.go.FuegoRandomPlayer
+                nose.tools.assert_true(player.__class__ == pyfeat.go.FuegoRandomPlayer)
 
         print 'final board: ', board.grid    
-
         print 'number of moves in last game: ', num_moves
 
         scores.append(board.score_simple_endgame())
 
-    print scores
+    print 'game scores: ', scores
     nose.tools.assert_true(numpy.mean(scores) > 0.0)
 
 if __name__ == "__main__":
