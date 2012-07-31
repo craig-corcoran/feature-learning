@@ -159,7 +159,7 @@ def estimate_value(FuegoBoard board, int min_rollouts = 64,
         mean = (i*mean + reward) / float(i + 1)
         variance = ( i*variance + (reward - mean)**2 ) / float(i + 1)
     
-        error_bound = variance / (i + 1)
+        error_bound = variance / float(i + 1)
 
         i += 1
 

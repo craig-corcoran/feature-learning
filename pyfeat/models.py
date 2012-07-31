@@ -80,71 +80,87 @@ def get_value_list(games_path,values_path):
 
 
 if __name__ == '__main__':
-    num_instances = 10
-    
-    values_path = 'data/go_values.fuego.rollouts=256.winrate.alp.pickle'
-    games_path = 'data/2010-01.pickle.gz'
-    
-    example_list = get_value_list(games_path, values_path)[:num_instances]
 
-    boards = numpy.asarray(numpy.round(2*numpy.random.random((num_instances,81))-1), numpy.int8)
+    num_samples = 10
+    values_path = 'values.test.gz'
+    
+    # unpack game, values dictionary 
+    with pyfeat.util.openz(values_path) as values_file:
+        evaluated_games = pickle.load(values_file)
+    
+    
+    #boards = numpy.asarray(numpy.round(2*numpy.random.random((num_instances,81))-1), numpy.int8)
+    # TODO make a dict or store as numpy array and list?
+    grids = numpy.zeros((0,9,9), numpy.int8)
+    values = []
+    for game in evaluated_games:
+        game_values = evaluated_games[game]
+        grids = numpy.vstack((grids, game.grids))
+        values.append(game_values)
+
+    example_list = zip(grids,values)
+    print example_list[:100]
+    print len(example_list)
+    example_list = example_list[:num_samples]
+    
     instances = []
     for (board,value) in example_list:
-        # make array/list to vw converter for input strings?
-        feat_string = str(pyfeat.feature_maps.rect_template(board.grid, edge_max = 2))[1:-1].replace(', ', ' ') 
+
+        # TODO make array/list to vw converter for input strings?
+        feat_string = str(pyfeat.go.hash_maps.rect_template(board, edge_max = 2))[1:-1].replace(', ', ' ') 
         instances.append(SimpleInstance(value, 1.0, feat_string))
 
     for (instance, prediction) in SimpleModel('myexample').train(instances).predict(instances):
         print prediction, instance
 
-#######
-    """
-        Predicting from an ExampleStream.  An ExampleStream basically
-        writes an input file for you from VowpalExample objects.
-        All training examples (value != None) must appear before test examples.
-    """
-    stream = vowpal.ExampleStream('vw.stream.txt')
-    examples = []
-    for i in xrange(num_examples):
+#####
+    #"""
+        #Predicting from an ExampleStream.  An ExampleStream basically
+        #writes an input file for you from VowpalExample objects.
+        #All training examples (value != None) must appear before test examples.
+    #"""
+    #stream = vowpal.ExampleStream('vw.stream.txt')
+    #examples = []
+    #for i in xrange(num_examples):
 
-        grid = numpy.round(2*numpy.random.random((9,9))) # 0,1,2
+        #grid = numpy.round(2*numpy.random.random((9,9)))  0,1,2
 
         #active_set = pyfeat.go.hash_maps.rect_template(grid, py_num_bins = 10**5)
-        active_set = pyfeat.go.py_hash_maps.rect_template(grid)
+        #active_set = pyfeat.go.py_hash_maps.rect_template(grid)
         
-        if i >= num_examples*(3/4.):
-            value = None
-        else:
-            value = numpy.random.random()
+        #if i >= num_examples*(3/4.):
+            #value = None
+        #else:
+            #value = numpy.random.random()
 
-        # {'temp_feats' : {32 : None, 12: None, ..., idx: None} } for count = False (default)
-        # {'temp_feats' : {32 : 2, 12 : 1 , ..., idx: count} } for count=True
-        all_sections = dict([ ( 'temp_feats', dict( 
-                        zip(active_set, [None]*len(active_set))) )
-                        ])
+         #{'temp_feats' : {32 : None, 12: None, ..., idx: None} } for count = False (default)
+         #{'temp_feats' : {32 : 2, 12 : 1 , ..., idx: count} } for count=True
+        #all_sections = dict([ ( 'temp_feats', dict( 
+                        #zip(active_set, [None]*len(active_set))) )
+                        #])
         #all_sections = dict(zip(active_set, [None]*len(active_set)))
                         
 
-        ex = vowpal.VowpalExample(i, value)
+        #ex = vowpal.VowpalExample(i, value)
 
-        for (namespace, section) in all_sections.items():
-            ex.add_section(namespace, section)
-        stream.add_example(ex)
+        #for (namespace, section) in all_sections.items():
+            #ex.add_section(namespace, section)
+        #stream.add_example(ex)
     
-    print 'running through examples in vw'
-    vw = vowpal.Vowpal(path_vw, './vw.%s', {'--passes' : '200' })
-    preds = vw.predict_from_example_stream(stream)
-    
-    print 'print values from predictions: ', preds
-    for (id, value) in preds:
-        print 'prediction for %s is %s' % (id, value)
-
-#def test_vw_file( path_vw = '/usr/local/bin/vw'):
- 
+    #print 'running through examples in vw'
     #vw = vowpal.Vowpal(path_vw, './vw.%s', {'--passes' : '200' })
-    #preds = vw.predict_from_file('vw.file.txt')
+    #preds = vw.predict_from_example_stream(stream)
     
     #print 'print values from predictions: ', preds
     #for (id, value) in preds:
         #print 'prediction for %s is %s' % (id, value)
+
+#def test_vw_file( path_vw = '/usr/local/bin/vw'):
+ 
+    ##vw = vowpal.Vowpal(path_vw, './vw.%s', {'--passes' : '200' })
+    ##preds = vw.predict_from_file('vw.file.txt')
+    
+    ##print 'print values from predictions: ', preds
+    ##for (id, value) in preds:
+        ##print 'prediction for %s is %s' % (id, value)
 
