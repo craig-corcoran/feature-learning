@@ -1,3 +1,4 @@
+import copy
 import numpy
 import scipy.sparse
 import scipy.optimize
@@ -14,10 +15,10 @@ class GridWorld:
 
     _vecs = numpy.array([[1, 0], [-1, 0], [0, 1], [0, -1]]) # 4 movement dirs
 
-    def __init__(self, wall_matrix, goal_positions, init_state = None):
+    def __init__(self, wall_matrix, goal_matrix, init_state = None):
         
         self.walls = wall_matrix
-        self.goals = goal_positions
+        self.goals = goal_matrix
         # TODO assert walls and goals are correct format
 
         self.n_rows, self.n_cols = self.walls.shape
@@ -74,12 +75,12 @@ class GridWorld:
         without changing the current state '''
 
         # if at goal position, reinitialize to rand state
-        if self.state.tolist() in self.goals.tolist():
+        if self.goals[tuple(self.state)] == 1:
             return self.random_state()
         
         #randomly ignore actions and self-transition
-        if numpy.random.random() < 2e-1:
-            return self.state
+        #if numpy.random.random() < 2e-1:
+            #return self.state
 
         pos = self.state + action
         if self._check_valid_state(pos):
@@ -99,7 +100,7 @@ class GridWorld:
         ''' sample reward function for a given afterstate. Here we assume that 
         reward is a function of the subsequent state only, not the previous 
         state and action '''
-        if self.state.tolist() in self.goals.tolist():
+        if self.goals[tuple(self.state)] == 1:
             return 1
         else:
             return 0
@@ -124,7 +125,7 @@ class RandomPolicy:
 class MDP:
     
     def __init__(self, environment, policy):
-        self.environment = environment
+        self.env = environment
         self.policy = policy
         
     def sample(self, n_samples):
@@ -132,13 +133,13 @@ class MDP:
         returning arrays of state positions and rewards '''
         
         states = numpy.zeros((n_samples+1,2), dtype = numpy.int)
-        states[0] = self.environment.state
+        states[0] = self.env.state
         rewards = numpy.zeros(n_samples, dtype = numpy.int)
         
         for i in xrange(n_samples):
-            actions = self.environment.get_actions(self.environment.state)
+            actions = self.env.get_actions(self.env.state)
             action = self.policy.choose_action(actions)
-            next_state, reward = self.environment.take_action(action)
+            next_state, reward = self.env.take_action(action)
 
             states[i+1] = next_state
             rewards[i] = reward
@@ -147,14 +148,17 @@ class MDP:
 
 class SIRFObjectiveFn:
     
-    def __init__(self, W, rewards, states, env, mod_wt):
+    def __init__(self, W, rewards, states, env, mod_wt, reg_wt):
         
         self.W = scipy.sparse.csc_matrix(W)
         self.mod_wt = mod_wt
+        self.reg_wt = reg_wt
 
+        # TODO catch zero dividing
         rewards = rewards - numpy.mean(rewards) # worth loss is sparsity to center?
-        rewards = rewards / numpy.sqrt(numpy.mean(rewards**2)) # normalize std to one
-        assert (rewards.std() - 1) < 1e-8
+        #rewards = rewards / numpy.sqrt(numpy.mean(rewards**2)) # normalize std to one
+        #assert (rewards.std() - 1) < 1e-8
+        rewards = rewards / numpy.linalg.norm(rewards)
         self.R = scipy.sparse.csc_matrix(rewards).T # sparse row vector
 
         self.n_samples = max(rewards.shape)
@@ -164,11 +168,15 @@ class SIRFObjectiveFn:
         X_all = scipy.sparse.lil_matrix((self.n_samples+1, self.n_states), dtype = numpy.int)
         for j in xrange(self.n_samples+1):
             X_all[j, env.state_to_index(states[j])] = 1
-        X_all[:,-1] = 1 # append constant vector
+        #X_all[:,-1] = 1 # append constant vector
         X_all = scipy.sparse.csc_matrix(X_all)
 
         self.X = X_all[:-1]
         self.X_p = X_all[1:]
+        self.C = self.X.T * self.X # diagonal matrix of counts
+        assert (self.C.nonzero()[0] == self.C.nonzero()[1]).all()
+        self.C_inv = copy.deepcopy(self.C)
+        self.C_inv.data = 1./self.C_inv.data
 
         self._precompute()
         
@@ -183,24 +191,47 @@ class SIRFObjectiveFn:
         M = scipy.sparse.csc_matrix(numpy.repeat(means, self.PHI.shape[0], axis=0))
         self.PHI_p = self.PHI_p - M # subtract sample mean
 
-        # create diag matrix used to normalize each feature's variance to 1: TODO use diag?
+        # create diag matrix used to normalize each feature's variance to 1:
         STD = scipy.sparse.csc_matrix.mean(self.PHI.multiply(self.PHI), axis = 0)
         STD = numpy.sqrt(STD) + 1e-12
         D = scipy.sparse.dia_matrix((1./STD, 0), (self.n_features, self.n_features))
         
-        print self.PHI_p.shape
-        print D.shape
         self.PHI_p_norm = self.PHI_p * D
 
     def _reward_gradient(self):
         
         B = self.R.T * self.PHI
+
         dW_rew = self.X.T * (self.R * (B * self.E) + (self.PHI * B.T) * B \
                                                     - 2 * self.R * B)
+
+        
+        #dW_rew1 = self.X.T * self.R * B * self.E + self.X.T * self.PHI * B.T * B \
+                                                    #- 2 * self.X.T * self.R * B
+
+        #assert abs(scipy.sparse.csr_matrix.sum(dW_rew1 - dW_rew)) < 1e-8
+    
+        #dW_rewsum = scipy.sparse.csc_matrix(self.W.shape)
+        #for i in xrange(self.n_samples):
+            #phi = self.PHI[i,:].T
+            #x = self.X[i,:].T
+            #dW_rewsum = dW_rewsum + 2. * (x * phi.T * phi * phi.T - x * phi.T)* self.R[i]**2
+        
+        #print scipy.sparse.csc_matrix.sum(dW_rewsum - dW_rew)
+        #print scipy.sparse.csc_matrix.sum(dW_rewsum)
+        #print scipy.sparse.csr_matrix.sum(dW_rew)
+    
+        #plot_weights(numpy.hstack((dW_rew.toarray(),dW_rewsum.toarray())), tuple([numpy.sqrt(dW_rew.shape[0])]*2) )
+        
+        #assert abs(scipy.sparse.csc_matrix.sum(dW_rewsum - dW_rew)) < 1e-8 
+        
+
+        
         #db
         #A = self.X.T * R
         #dW_rew_old = A * (B * self.PHI.T) * self.PHI + X.T * (self.PHI * B.T) * B - 2 * A * B  could factor X.T out
         #assert numpy.linalg.norm((dW_rew - dW_rew_old).todense()) < 1e-4
+
         return dW_rew
 
     def _model_gradient(self):
@@ -217,23 +248,35 @@ class SIRFObjectiveFn:
                (self.PHI * B.T) * B - 2 * self.PHI_p_norm * B)) \
                * (1./self.n_features)
 
+    def _sparsity_gradient(self):
+        
+        #print 'active feature means: ', numpy.mean(U.data)
+        #print 'active feature std: ', numpy.std(U.data)
+        
+        return self.C * numpy.tanh(self.W.toarray().flatten())
+
     def get_gradient(self, W):
         
-        print 'gradient'
+        #print 'gradient eval'
+        #print 'W: ', W.shape
 
         W = scipy.sparse.csc_matrix(numpy.reshape(W, (self.n_states, self.n_features)))
         if not (W.data == self.W.data).all(): # too slow for inner loop?
             self.W = W
             self._precompute()
-            
+        
         dW_rew = (1./self.n_samples) * self._reward_gradient()
         dW_mod = (1./self.n_samples) * self._model_gradient()
+        dW = (dW_rew + self.mod_wt * dW_mod).toarray().flatten()
+        dW = dW + (1./self.n_samples) * self.reg_wt * self._sparsity_gradient()
         
-        return (dW_rew + self.mod_wt * dW_mod).todense().flatten() 
+
+
+        return dW 
 
     def get_loss(self, W):
-        
-        print 'loss'
+        #print 'loss eval'
+        #print 'W: ', W.shape
 
         W = scipy.sparse.csc_matrix(numpy.reshape(W, (self.n_states, self.n_features)))
         if not (W.data == self.W.data).all():
@@ -241,21 +284,48 @@ class SIRFObjectiveFn:
             self._precompute()
         
         # reward loss:
+
+        plt.subplot(311)
+        plot_im(numpy.reshape((self.X.T * self.R).toarray(), (9,9)))
+        plt.subplot(312)
+        plot_im(numpy.reshape((self.X.T * self.PHI * self.PHI.T * self.R).toarray(), (9,9)))
+        plt.subplot(313)
+        plot_im(numpy.reshape((self.get_gradient(W.toarray())), (9,9)))
+        plt.show()
+
         r_err = (self.PHI * self.PHI.T * self.R - self.R)
         r_loss = 0.5 * scipy.sparse.csc_matrix.sum(r_err.multiply(r_err))
+        print 'reward loss: ', 1./self.n_samples * r_loss
 
         # model loss:
         m_err = (self.PHI * self.PHI.T * self.PHI_p_norm - self.PHI_p_norm)
         m_loss = 0.5 * scipy.sparse.csc_matrix.sum(m_err.multiply(m_err))
+        #print 'model loss: ', m_loss
 
-        return (1./self.n_samples) * (r_loss + self.mod_wt * m_loss)
+        # regularization / sparsity loss
+        U = abs((self.X.T * self.PHI).toarray().flatten())
+        L = numpy.zeros(U.shape)
+        L[U > 1e2] = U[U > 1e2]
+        L[U <= 1e2] = numpy.log(numpy.cosh(U[U <= 1e2]))
+        s_loss = numpy.sum(L)
+        #print 'sparsity loss: ', s_loss
+
+        return (1./self.n_samples) * (r_loss + self.mod_wt * m_loss \
+                                             + self.reg_wt * s_loss)
 
 def init_mdp(goals = None, walls_on = False, size = 9):
 
     if goals is None:
-        #goals = numpy.array([walls.shape]) / 2 # single goal ixn center
-        goals = numpy.array([[2,2], [2,6], [6,2], [6,6]]) # four goals in the corners 
-    
+
+        buff = size/9
+        pos = size/3-1
+        goals = numpy.zeros((size,size))
+        goals[pos-buff:pos+buff, pos-buff:pos+buff] = 1
+        goals[pos-buff:pos+buff, size-pos-buff:size-pos+buff] = 1
+        goals[size-pos-buff:size-pos+buff, pos-buff:pos+buff] = 1
+        goals[size-pos-buff:size-pos+buff, size-pos-buff:size-pos+buff] = 1
+
+ 
     walls = numpy.zeros((size,size))
     if walls_on:
         walls[:, size/2 + 1] = 1
@@ -273,135 +343,62 @@ def init_weights(shape):
 
     W = numpy.random.standard_normal(shape)
     inv_norms = numpy.diag(1./numpy.sqrt(numpy.sum(W**2, axis=0)))
-    W = numpy.dot(W, inv_norms )
-    W = scipy.sparse.csc_matrix(W)
+    W = numpy.dot(W, inv_norms)
 
     return W
 
-def cg_main(n_samples = 250, size = 9, goals = None, \
-        n_features = 8, mod_wt = 8):
-    
-    mdp = init_mdp()
-    env = mdp.environment
-    W = init_weights((size**2, n_features)).todense()
-
-    n_iters = 10
-    for i in xrange(n_iters):
+def plot_weights(W, im_shape):
         
-        states, rewards = mdp.sample(n_samples)
-        obj = SIRFObjectiveFn(W, rewards, states, env, mod_wt)
-        print scipy.optimize.fmin_cg(obj.get_loss, W, fprime = obj.get_gradient)
-
-    
-def main(n_samples = 250, walls = numpy.zeros((9,9)), goals = None, \
-        n_features = 8, mod_wt = 8): #, lr = 1e-2, total_decay = 1e-1):
-
-    if goals is None:
-        #goals = numpy.array([walls.shape]) / 2 # single goal ixn center
-        goals = numpy.array([[2,2], [2,6], [6,2], [6,6]]) # four goals in the corners 
-    
-    walls[:,4] = 1
-    walls[4,:] = 1
-    grid_world = GridWorld(walls, goals)
-
-    rand_policy = RandomPolicy()
-
-    mdp = MDP(grid_world, rand_policy)
-    
-    n_states = numpy.prod(walls.shape) 
-
-    W = numpy.random.standard_normal((n_states, n_features))
-    inv_norms = numpy.diag(1./numpy.sqrt(numpy.sum(W**2, axis=0)))
-    W = numpy.dot(W, inv_norms )
-    #W[-1, :] = 0 # set bias to zero initialy
-    W = scipy.sparse.csc_matrix(W)
-
-    n_iters = 10000
-    decay_rate = numpy.e**(numpy.log(total_decay) / n_iters)
-    for i in xrange(n_iters):
-        
-        states, rewards = mdp.sample(n_samples)
-
-        
-        dW_rew, dW_mod = get_weight_update(W, states, rewards, grid_world)
-
-        #for i in xrange(n_features):
-            #plt.subplot(2,2,i)
-            #plt.imshow(numpy.reshape(dW_mod.todense()[:,i], \
-                #(grid_world.n_rows, grid_world.n_cols)) \
-                #,interpolation = 'nearest', cmap = 'gray')
-            #plt.colorbar()
-        
-        #plt.show()
-        ##assert False
-
-        if numpy.isnan(dW_rew.data).any():
-            print 'W: ', W
-            assert False
-        if numpy.isnan(dW_mod.data).any():
-            print 'W: ', W
-            assert False
-        if numpy.isnan(W.data).any():
-            print 'W: ', W
-        
-
-        reward_update = lr_rew * decay_rate**i * (1./n_samples) * dW_rew
-        model_update =  lr_mod * decay_rate**i * (1./n_samples) * dW_mod
-        dW = reward_update + model_update
-        #dW = lr_rew * decay_rate**i * (1./n_samples) * dW_rew \
-           #+ lr_mod * decay_rate**i * (1./n_samples) * dW_mod
-        W = W - dW    
-        
-        if i % 500 == 0:
-
-            print 'iter: ', i
-            print 'reward update norm: ', numpy.linalg.norm(dW_rew.data)
-            print 'model update norm: ', numpy.linalg.norm(dW_mod.data)
-
-            for i in xrange(n_features):
-                plt.subplot(4,n_features,i+1)
-                plt.imshow(numpy.reshape(W.todense()[:,i], \
-                    (grid_world.n_rows, grid_world.n_cols)) \
-                    ,interpolation = 'nearest', cmap = 'gray')
-                plt.colorbar()
-                plt.title('feature' + str(i))
-            
-            for i in xrange(n_features):
-                plt.subplot(4,n_features,i+n_features+1)
-                plt.imshow(numpy.reshape(dW.todense()[:,i], \
-                    (grid_world.n_rows, grid_world.n_cols)) \
-                    ,interpolation = 'nearest', cmap = 'gray')
-                plt.colorbar()
-                plt.title('update' + str(i))
-
-            for i in xrange(n_features):
-                plt.subplot(4,n_features,i+2*n_features+1)
-                plt.imshow(numpy.reshape(reward_update.todense()[:,i], \
-                    (grid_world.n_rows, grid_world.n_cols)) \
-                    ,interpolation = 'nearest', cmap = 'gray')
-                plt.colorbar()
-                plt.title('reward update' + str(i))
-
-            for i in xrange(n_features):
-                plt.subplot(4,n_features,i+3*n_features+1)
-                plt.imshow(numpy.reshape(model_update.todense()[:,i], \
-                    (grid_world.n_rows, grid_world.n_cols)) \
-                    ,interpolation = 'nearest', cmap = 'gray')
-                plt.colorbar()
-                plt.title('model update' + str(i))
-            
-            plt.show()
-
-
-    for i in xrange(n_features):
-        plt.subplot(2,2,i)
-        plt.imshow(numpy.reshape(W[:,i].todense(), \
-            (grid_world.n_rows, grid_world.n_cols)) \
+    n_rows, n_cols = im_shape
+    n_states, n_features = W.shape
+    if n_features == 1:
+        plt.imshow(numpy.reshape(W, \
+            (n_rows, n_cols)) \
             ,interpolation = 'nearest', cmap = 'gray')
         plt.colorbar()
+    else:
+        for i in xrange(n_features):
+            plt.subplot(n_features/2 , 5 , i + 1)
+            plot_im(numpy.reshape(W[:,i], (n_rows, n_cols)))
 
-    print W
     plt.show()
+
+def plot_im(W):
+    plt.imshow(W, interpolation = 'nearest', cmap = 'gray')
+    plt.colorbar()
+    
+        
+def cg_main(n_samples = 1000, size = 9, goals = None, \
+        n_features = 1, mod_wt = 0, reg_wt = 0):
+    
+    mdp = init_mdp(size=size)
+    env = mdp.env
+    n_states = size **2
+    W = init_weights((n_states, n_features))
+    W_init = W.flatten()
+    
+    #plot_weights(W, (size,size))
+
+    n_iters = 20
+    for i in xrange(n_iters):
+        print 'iter: ', i+1
+
+        states, rewards = mdp.sample(n_samples)
+        obj = SIRFObjectiveFn(W, rewards, states, env, mod_wt, reg_wt)
+
+        W_init = scipy.optimize.fmin_cg(obj.get_loss, W_init, \
+                                        fprime = obj.get_gradient, \
+                                        maxiter = 20)
+
+        W_init = numpy.reshape(W_init, (n_states, n_features))
+        print numpy.linalg.norm(W_init - W)
+        W = W_init
+
+        plot_weights(W, (size,size))
+        
+
+    plot_weights(W, (size,size))
+
 
 def test_grid_world():
 
@@ -436,6 +433,8 @@ def test_grid_world():
 # plot optimal value function and projected value function
 #   -solve for optimal using value iteration
 # get rid of constant feature?
+
+# mix samples for minibatches
 
 
 
