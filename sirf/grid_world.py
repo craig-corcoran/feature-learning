@@ -188,15 +188,22 @@ class SIRFObjectiveFn:
 
         # for model update
         means = scipy.sparse.csc_matrix.mean(self.PHI, axis=0)
-        M = scipy.sparse.csc_matrix(numpy.repeat(means, self.PHI.shape[0], axis=0))
-        self.PHI_p = self.PHI_p - M # subtract sample mean
+        M = scipy.sparse.csc_matrix(numpy.repeat(means, self.PHI.shape[0], \
+                                                 axis=0))
+        self.PHI_p_norm = self.PHI_p - M # subtract sample mean
 
         # create diag matrix used to normalize each feature's variance to 1:
-        STD = scipy.sparse.csc_matrix.mean(self.PHI.multiply(self.PHI), axis = 0)
-        STD = numpy.sqrt(STD) + 1e-12
-        D = scipy.sparse.dia_matrix((1./STD, 0), (self.n_features, self.n_features))
-        
-        self.PHI_p_norm = self.PHI_p * D
+        #STD = scipy.sparse.csc_matrix.mean(self.PHI.multiply(self.PHI), axis = 0)
+        #STD = numpy.sqrt(STD) + 1e-12
+        #D = scipy.sparse.dia_matrix((1./STD, 0), (self.n_features, self.n_features))
+        #self.PHI_p_norm = self.PHI_p * D
+
+        # or instead normalize each column of PHI_p to one:
+        self.D = scipy.sparse.dia_matrix( ((1./ numpy.apply_along_axis( \
+            numpy.linalg.norm, 0, self.PHI_p.toarray())), 0), \
+            (self.n_features, self.n_features)) \
+            
+        self.PHI_p_norm = self.PHI_p_norm * self.D
 
     def _reward_gradient(self):
         
@@ -237,23 +244,25 @@ class SIRFObjectiveFn:
     def _model_gradient(self):
         
         # old update using chain rule
-        #E_p = PHI_p_norm.T * PHI
-        #C = D * (E_p * E - 2*E_p)
-        #return (X.T * (PHI_p * C + PHI * E_p.T * E_p) \
-               #+ X_p.T * (PHI * C.T + PHI_p_norm * D)) * (1./n_features)
+        E_p = self.PHI_p_norm.T * self.PHI
+        C = self.D * (E_p * self.E - 2*E_p)
+        return (self.X.T * (self.PHI_p_norm * C + self.PHI * E_p.T * E_p) \
+               + self.X_p.T * (self.PHI * C.T + self.PHI_p_norm * self.D)) \
+               * (1./self.n_features)
 
         # alternate update, treating next step as static images
-        B = self.PHI_p_norm.T * self.PHI
-        return (self.X.T * (self.PHI_p_norm * (B * self.E) +  \
-               (self.PHI * B.T) * B - 2 * self.PHI_p_norm * B)) \
-               * (1./self.n_features)
+        #B = self.PHI_p_norm.T * self.PHI
+        #return (self.X.T * (self.PHI_p_norm * (B * self.E) +  \
+               #(self.PHI * B.T) * B - 2 * self.PHI_p_norm * B)) \
+               #* (1./self.n_features)
 
     def _sparsity_gradient(self):
         
         #print 'active feature means: ', numpy.mean(U.data)
         #print 'active feature std: ', numpy.std(U.data)
-        
-        return self.C * numpy.tanh(self.W.toarray().flatten())
+        # weight sparsity by probability state is sampled
+        # TODO add constant here for tanh scaling?
+        return (1./self.n_samples) * self.C * numpy.tanh(self.W.toarray())
 
     def get_gradient(self, W):
         
@@ -265,13 +274,14 @@ class SIRFObjectiveFn:
             self.W = W
             self._precompute()
         
-        dW_rew = (1./self.n_samples) * self._reward_gradient()
-        dW_mod = (1./self.n_samples) * self._model_gradient()
-        dW = (dW_rew + self.mod_wt * dW_mod).toarray().flatten()
-        dW = dW + (1./self.n_samples) * self.reg_wt * self._sparsity_gradient()
+        dW_rew = (self._reward_gradient()).toarray()
+        dW_mod = (self._model_gradient()).toarray()
+        dW_reg = self._sparsity_gradient()
+
+        dW = (dW_rew + self.mod_wt * dW_mod + self.reg_wt * dW_reg).flatten()
+
+        #print 'gradient norm: ', scipy.linalg.norm(dW)
         
-
-
         return dW 
 
     def get_loss(self, W):
@@ -285,17 +295,17 @@ class SIRFObjectiveFn:
         
         # reward loss:
 
-        plt.subplot(311)
-        plot_im(numpy.reshape((self.X.T * self.R).toarray(), (9,9)))
-        plt.subplot(312)
-        plot_im(numpy.reshape((self.X.T * self.PHI * self.PHI.T * self.R).toarray(), (9,9)))
-        plt.subplot(313)
-        plot_im(numpy.reshape((self.get_gradient(W.toarray())), (9,9)))
-        plt.show()
+        #plt.subplot(311)
+        #plot_im(numpy.reshape((self.X.T * self.R).toarray(), (9,9)))
+        #plt.subplot(312)
+        #plot_im(numpy.reshape((self.X.T * self.PHI * self.PHI.T * self.R).toarray(), (9,9)))
+        #plt.subplot(313)
+        #plot_im(numpy.reshape((self.get_gradient(W.toarray())), (9,9)))
+        #plt.show()
 
         r_err = (self.PHI * self.PHI.T * self.R - self.R)
         r_loss = 0.5 * scipy.sparse.csc_matrix.sum(r_err.multiply(r_err))
-        print 'reward loss: ', 1./self.n_samples * r_loss
+        #print 'reward loss: ', 1./self.n_samples * r_loss
 
         # model loss:
         m_err = (self.PHI * self.PHI.T * self.PHI_p_norm - self.PHI_p_norm)
@@ -310,8 +320,7 @@ class SIRFObjectiveFn:
         s_loss = numpy.sum(L)
         #print 'sparsity loss: ', s_loss
 
-        return (1./self.n_samples) * (r_loss + self.mod_wt * m_loss \
-                                             + self.reg_wt * s_loss)
+        return (r_loss + self.mod_wt * m_loss + self.reg_wt * s_loss)
 
 def init_mdp(goals = None, walls_on = False, size = 9):
 
@@ -341,9 +350,9 @@ def init_mdp(goals = None, walls_on = False, size = 9):
 
 def init_weights(shape):
 
-    W = numpy.random.standard_normal(shape)
-    inv_norms = numpy.diag(1./numpy.sqrt(numpy.sum(W**2, axis=0)))
-    W = numpy.dot(W, inv_norms)
+    W = 1e-4 * numpy.random.standard_normal(shape)
+    #inv_norms = numpy.diag(1./numpy.sqrt(numpy.sum(W**2, axis=0)))
+    #W = numpy.dot(W, inv_norms)
 
     return W
 
@@ -358,7 +367,7 @@ def plot_weights(W, im_shape):
         plt.colorbar()
     else:
         for i in xrange(n_features):
-            plt.subplot(n_features/2 , 5 , i + 1)
+            plt.subplot(n_features/5 , 5 , i + 1)
             plot_im(numpy.reshape(W[:,i], (n_rows, n_cols)))
 
     plt.show()
@@ -368,8 +377,8 @@ def plot_im(W):
     plt.colorbar()
     
         
-def cg_main(n_samples = 1000, size = 9, goals = None, \
-        n_features = 1, mod_wt = 0, reg_wt = 0):
+def cg_main(n_samples = 500, size = 9, goals = None, \
+        n_features = 25, mod_wt = 4, reg_wt = 4e-1):
     
     mdp = init_mdp(size=size)
     env = mdp.env
@@ -379,7 +388,7 @@ def cg_main(n_samples = 1000, size = 9, goals = None, \
     
     #plot_weights(W, (size,size))
 
-    n_iters = 20
+    n_iters = 100
     for i in xrange(n_iters):
         print 'iter: ', i+1
 
@@ -388,13 +397,16 @@ def cg_main(n_samples = 1000, size = 9, goals = None, \
 
         W_init = scipy.optimize.fmin_cg(obj.get_loss, W_init, \
                                         fprime = obj.get_gradient, \
-                                        maxiter = 20)
+                                        maxiter = 3,
+                                        gtol = 1e-8)
 
         W_init = numpy.reshape(W_init, (n_states, n_features))
-        print numpy.linalg.norm(W_init - W)
+        print 'dW norm: ', numpy.linalg.norm(W_init - W)
         W = W_init
+        print 'W column norms: ', numpy.apply_along_axis(numpy.linalg.norm, 0, W)
+        
 
-        plot_weights(W, (size,size))
+        #plot_weights(W, (size,size))
         
 
     plot_weights(W, (size,size))
