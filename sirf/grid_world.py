@@ -538,7 +538,7 @@ def zero_array(num_zeros, n):
         
 def cg_main(mb_size = 600, n_iters = 100, size = 9, goals = None, \
         n_features = 10, rew_wt = 1., mod_wt = 1., reg_wt = 2., \
-        lam = 0.9, gam = 0.999):
+        lam = 0.9, gam = 0.99):
     
     mdp = init_mdp(size=size, walls_on = True)
     env = mdp.env
