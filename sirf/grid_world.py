@@ -84,6 +84,8 @@ class GridWorld:
         # normalize rows? to have unit sum
         self.P = numpy.dot(numpy.diag(1./(numpy.sum(P, axis=1)+1e-14)), P)
         
+        # TODO should R, P be sparse vectors? - corresponding changes in dbel.model
+
         # build reward function R
         self.R = numpy.zeros(self.n_states)
         nz = zip(*self.goals.nonzero())
@@ -343,53 +345,11 @@ class MDP:
 
         return X
 
-def value_iteration(P, R, gam = (1-2*1e-2), eps = 1e-4):
-    '''solve for true value function using value iteration '''
-    V = numpy.ones((P.shape[0], 1), dtype = numpy.float64) / P.shape[0]
-    if R.ndim == 1:
-        R = R[:,None]
-    
-    delta = 1e4
-    while numpy.linalg.norm(delta) > eps:
-        delta = R + gam * numpy.dot(P, V) - V
-        V = V + delta
-
-    #plt.imshow(numpy.reshape(V, (9,9)), interpolation = 'nearest', cmap = 'jet')
-    #plt.colorbar()
-    #plt.show()
-    return V
-
-def plot_weights(W, im_shape):
-        
-    n_rows, n_cols = im_shape
-    n_states, n_features = W.shape
-    if n_features == 1:
-        plt.imshow(numpy.reshape(W, \
-            (n_rows, n_cols)) \
-            ,interpolation = 'nearest', cmap = 'gray')
-        plt.colorbar()
-    else:
-        for i in xrange(n_features):
-            plt.subplot(n_features/5, 5 , i + 1)
-            plot_im(numpy.reshape(W[:,i], (n_rows, n_cols)))
-
-    plt.show()
-
-def plot_im(W):
-    plt.imshow(W, interpolation = 'nearest', cmap = 'gray')
-    plt.colorbar()
-
-
 def main():
     mdp = MDP()
-
     X = mdp.sample_grid_world(100)
-
     R = mdp.env.R
     P = mdp.env.P
-    
-    v = value_iteration(P,R)
-
 
 if __name__ == '__main__':
     main()
