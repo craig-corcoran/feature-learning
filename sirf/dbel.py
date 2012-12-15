@@ -1,7 +1,12 @@
 import copy
+import time
 import numpy
 import scipy.sparse
+import theano
+import theano.sparse
+import theano.sandbox.linalg
 import grid_world
+
 
 # TODO 
 # on-policy v uniform weighting for true be, value error
@@ -32,16 +37,16 @@ class Model:
         #assert numpy.linalg.norm(v_p - v[:,None]) < 1e-6
         #return v
         
-    def get_stationary(self, R, P, gam, eps = 1e-8):
-        V = numpy.ones((P.shape[0], 1), dtype = numpy.float64) / P.shape[0]
-        if R.ndim == 1:
-            R = R[:,None]
+    #def get_stationary(self, R, P, gam, eps = 1e-8):
+        #V = numpy.ones((P.shape[0], 1), dtype = numpy.float64) / P.shape[0]
+        #if R.ndim == 1:
+            #R = R[:,None]
         
-        delta = 1e4
-        while numpy.linalg.norm(delta) > eps:
-            delta = R + gam * numpy.dot(P, V) - V
-            V = V + delta
-        return V
+        #delta = 1e4
+        #while numpy.linalg.norm(delta) > eps:
+            #delta = R + gam * numpy.dot(P, V) - V
+            #V = V + delta
+        #return V
 
     def get_lstd_weights(self, PHI):
 
@@ -72,19 +77,19 @@ class Model:
 
 class Basis:
     ''' k dimensional basis over discrete state space of size n 
-    given tabular features x, phi = THETA.T * x'''
+    given tabular features x, phi = theta.T * x'''
     
-    def __init__(self, k, n, THETA = None):
+    def __init__(self, k, n, theta = None):
         
         self.k = k
-        self.THETA = THETA
-        if self.THETA is None:
-            self.THETA = numpy.random.standard_normal((n,k))
+        self.theta = theta
+        if self.theta is None:
+            self.theta = numpy.random.standard_normal((n,k))
     
     def get_phi(self, X):
         if scipy.sparse.issparse(X):
-            return X.dot(self.THETA)
-        return numpy.dot(X, self.THETA)
+            return X.dot(self.theta)
+        return numpy.dot(X, self.theta)
 
     def sample_lstd_weights(self, PHI, PHI_p, R, gam):
 
@@ -117,18 +122,89 @@ class Basis:
         
         return numpy.linalg.norm(PHI_p - numpy.dot(PHI, numpy.linalg.lstsq(PHI, PHI_p)[0]))
 
-def test_basis(k=1, n=81, n_samples = 5000):
+class TheanoBasis:
+    
+    def __init__(self, k, n, theta = None):
+        
+        self.k = k
+        self.theta = theta
+        if self.theta is None:
+            self.theta = numpy.random.standard_normal((n,k))
+
+        t_theta = theano.tensor.dmatrix('theta')
+        t_S = theano.sparse.csr_matrix('S')
+        t_S_p = theano.sparse.csr_matrix('S_p')
+        t_R = theano.sparse.csr_matrix('R')
+        t_gam = theano.tensor.dscalar('gamma')
+
+        # encode s and s'
+        t_PHI = theano.sparse.structured_dot(t_S, t_theta)
+        t_PHI_p = theano.sparse.structured_dot(t_S_p, t_theta)
+        
+        # lstd weights for BE using normal eqns
+        a = theano.tensor.dot(t_PHI.T, (t_PHI - t_gam * t_PHI_p))
+        b = theano.sparse.structured_dot(t_R.T, t_PHI).T
+        #t_w_lstd = theano.sandbox.linalg.solve(a,b) # solve currently has no gradient implemented
+        t_w_lstd = theano.tensor.dot(theano.sandbox.linalg.matrix_inverse(a), b)
+        
+        # bellman error loss
+        e = t_R - theano.tensor.dot((t_PHI - t_gam * t_PHI_p), t_w_lstd) # error vector
+        L_be = theano.tensor.sqrt(theano.tensor.sum(theano.tensor.sqr(e))) # TODO need sqrt?
+        self.loss_be = theano.function([t_theta, t_S, t_S_p, t_R, t_gam], L_be)
+
+        # bellman error gradient
+        grad_L_be = theano.grad(L_be, [t_theta])[0]
+        self.grad_be = theano.function([t_theta, t_S, t_S_p, t_R, t_gam], grad_L_be)
+
+    
+    def get_phi(self, X):
+        if scipy.sparse.issparse(X):
+            return X.dot(self.theta)
+        return numpy.dot(X, self.theta)
+
+    def sample_lstd_weights(self, PHI, PHI_p, R, gam):
+
+        a = numpy.dot(PHI.T, (PHI - gam * PHI_p)) 
+        if scipy.sparse.issparse(R):
+            b = R.T.dot(PHI).T
+        else:
+            b = numpy.dot(PHI.T, R)
+        
+        if a.ndim > 0:
+            return numpy.linalg.solve(a,b) 
+        return b/a
+
+    #def loss_be(self, PHI, PHI_p, R, gam, w = None):
+
+        #if w is None: # solve lstd for given samples
+            #w = self.sample_lstd_weights(PHI, PHI_p, R, gam)
+
+        #if PHI.ndim == 1:
+            #PHI = PHI[:,None]
+            #PHI_p = PHI_p[:,None]
+            
+        #return numpy.linalg.norm(R - numpy.dot((PHI - gam * PHI_p), w))
+
+    def loss_r(self, PHI, R):
+        R = R.todense()
+        return numpy.linalg.norm(R - numpy.dot(PHI, numpy.linalg.lstsq(PHI, R)[0]))
+
+    def loss_P(self, PHI, PHI_p, gam):
+        
+        return numpy.linalg.norm(PHI_p - numpy.dot(PHI, numpy.linalg.lstsq(PHI, PHI_p)[0]))
+
+def test_basis(k=4, n=81, n_samples = 5000):
     
     mdp = grid_world.MDP()
     m = Model(mdp.env.R, mdp.env.P) 
     b = Basis(k,n,numpy.random.standard_normal((n,k)))
     c = copy.deepcopy(b)
-    c.THETA = c.THETA[:,0] # c has only one random feature
+    c.theta = c.theta[:,0] # c has only one random feature
     
     
     # test true model loss functions
-    print 'exact (unif. weighted) bellman error: ', m.bellman_error(b.THETA)
-    print 'exact (unif. weighted) value error: ', m.value_error(b.THETA)
+    print 'exact (unif. weighted) bellman error: ', m.bellman_error(b.theta)
+    print 'exact (unif. weighted) value error: ', m.value_error(b.theta)
 
     # check that the value function has zero bellman error
     assert m.bellman_error(m.V) < 1e-8
@@ -173,8 +249,8 @@ def test_basis(k=1, n=81, n_samples = 5000):
 
     
     print 'sampled bellman error loss with k features: ', l_be
-    print 'bellman error with value only one feature: ', one_be
-    print 'bellman error with value function feature: ', v_be
+    print 'sampled bellman error loss with only one feature: ', one_be
+    print 'sampled bellman error loss with value function feature: ', v_be
 
     print 'sampled reward loss: ', b.loss_r(PHI, R)
     print 'sampled model loss: ', b.loss_P(PHI, PHI_p, m.gam)
@@ -188,9 +264,64 @@ def test_basis(k=1, n=81, n_samples = 5000):
     if l_be == v_be:
         assert l_be == 0
     else:
-        assert v_be < one_be 
+        assert v_be < one_be
+
+def test_theano_basis(k=4, n=81, n_samples = 5000, alpha = 1e-1):
+
+    mdp = grid_world.MDP()
+    m = Model(mdp.env.R, mdp.env.P) 
+    theta = numpy.random.standard_normal((n,k))
+    b = Basis(k, n, theta)
+    t = TheanoBasis(k, n, theta)
+    
+    R = numpy.zeros(1)
+    # make sure we saw a reward in the sample set
+    while not (len(R.nonzero()[0]) > 0):
+        
+        X = mdp.sample_grid_world(n_samples)
+        numpy.random.shuffle(X)
+        X = scipy.sparse.csr_matrix(X[:,:-2], dtype = numpy.float64) # throw out the actions
+
+        n_vars = (X.shape[1]-1)/2.
+
+        S = X[:,:n_vars]
+        S_p = X[:,n_vars:-1]
+        R = X[:,-1]
     
 
+    PHI = b.get_phi(S)
+    PHI_p = b.get_phi(S_p)
+
+    t_init = time.time()
+    be_loss_np = b.loss_be(PHI, PHI_p, R, m.gam)
+    print 'time to compute bellman error, numpy: ',  time.time() - t_init
+
+    t_init = time.time()
+    be_loss_th = t.loss_be(t.theta, S, S_p, R, m.gam)
+    print 'time to compute bellman error, theano: ',  time.time() - t_init
+
+    t_init = time.time()
+    be_grad = t.grad_be(t.theta, S, S_p, R, m.gam).shape
+    print 'time to compute bellman error gradient: ',  time.time() - t_init
+
+    print 'bellman error loss, numpy functions: ', be_loss_np
+    print 'bellman error loss, theano functions: ', be_loss_th
+    print 'gradient shape: ', be_grad
+    print 'gradient l1 norm: ', numpy.sum(numpy.abs(be_grad))
+
+    # follow gradient of bellman error loss
+    for i in xrange(5000):
+        
+
+        t.theta -= alpha * t.grad_be(t.theta, S, S_p, R, m.gam)
+        if i % 100 == 0:
+            print i
+            print t.loss_be(t.theta, S, S_p, R, m.gam)
+            b.theta = t.theta
+            PHI = b.get_phi(S)
+            PHI_p = b.get_phi(S_p)
+            print b.loss_be(PHI, PHI_p, R, m.gam)
+    
 
 if __name__ == '__main__':
-    test_basis()
+    test_theano_basis()
