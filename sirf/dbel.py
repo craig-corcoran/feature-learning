@@ -6,6 +6,7 @@ import theano
 import theano.sparse
 import theano.sandbox.linalg
 import grid_world
+import matplotlib.pyplot as plt
 
 
 # TODO 
@@ -152,6 +153,12 @@ class TheanoBasis:
         L_be = theano.tensor.sqrt(theano.tensor.sum(theano.tensor.sqr(e))) # TODO need sqrt?
         self.loss_be = theano.function([t_theta, t_S, t_S_p, t_R, t_gam], L_be)
 
+        # regularization
+        el1 = theano.tensor.sum(abs(t_theta)) # l1 norm
+        self.reg = theano.function([t_theta], el1) 
+        greg = theano.grad(el1, [t_theta])[0]
+        self.grad_reg = theano.function([t_theta], greg)
+
         # bellman error gradient
         grad_L_be = theano.grad(L_be, [t_theta])[0]
         self.grad_be = theano.function([t_theta, t_S, t_S_p, t_R, t_gam], grad_L_be)
@@ -266,9 +273,12 @@ def test_basis(k=4, n=81, n_samples = 5000):
     else:
         assert v_be < one_be
 
-def test_theano_basis(k=4, n=81, n_samples = 5000, alpha = 1e-1):
+def test_theano_basis(k=16, n=81, n_samples = 5000, alpha = 1.e-1,
+        reg_param = 1.e-2, decay = 1.-1e-4, n_iters = 10000):
+    
+    size = numpy.sqrt(n)
 
-    mdp = grid_world.MDP()
+    mdp = grid_world.MDP(walls_on = True)
     m = Model(mdp.env.R, mdp.env.P) 
     theta = numpy.random.standard_normal((n,k))
     b = Basis(k, n, theta)
@@ -304,23 +314,55 @@ def test_theano_basis(k=4, n=81, n_samples = 5000, alpha = 1e-1):
     be_grad = t.grad_be(t.theta, S, S_p, R, m.gam).shape
     print 'time to compute bellman error gradient: ',  time.time() - t_init
 
-    print 'bellman error loss, numpy functions: ', be_loss_np
+    print 'bellman error loss, numpy functions: ',
     print 'bellman error loss, theano functions: ', be_loss_th
     print 'gradient shape: ', be_grad
     print 'gradient l1 norm: ', numpy.sum(numpy.abs(be_grad))
 
     # follow gradient of bellman error loss
-    for i in xrange(5000):
+    for i in xrange(n_iters):
         
 
-        t.theta -= alpha * t.grad_be(t.theta, S, S_p, R, m.gam)
-        if i % 100 == 0:
+        t.theta -= alpha * t.grad_be(t.theta, S, S_p, R, m.gam) # loss min
+        t.theta -= alpha * reg_param * t.grad_reg(t.theta)
+        if i % (n_iters / 10) == 0:
             print i
             print t.loss_be(t.theta, S, S_p, R, m.gam)
             b.theta = t.theta
             PHI = b.get_phi(S)
             PHI_p = b.get_phi(S_p)
             print b.loss_be(PHI, PHI_p, R, m.gam)
+            alpha = alpha * decay
+    
+    plot_features(t.theta)
+    plt.show()
+
+# TODO loss on perfect model BE and stsq
+# add walls
+
+def plot_features(phi, r = None, c = None):
+ 
+    j,k = phi.shape
+    if r is None:
+        r = c = numpy.round(numpy.sqrt(j))
+        assert r*c == j
+        
+    m = numpy.ceil(numpy.sqrt(k))
+    n = numpy.ceil(k/float(m))
+
+    print m, n
+
+    f = plt.figure()
+    assert m*n == k # this may not work for any k
+    
+    for i in xrange(k):
+        
+        u = numpy.floor(i / m) 
+        v = i % n
+        
+        im = numpy.reshape(phi[:,i], (r,c))
+        ax = f.add_axes([float(u)/m, float(v)/n, 1./m, 1./n])
+        ax.imshow(im, cmap = 'gray', interpolation = 'nearest')
     
 
 if __name__ == '__main__':
