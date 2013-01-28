@@ -13,8 +13,8 @@ class GridWorld:
 
     '''
 
-    _vecs = numpy.array([[1, 0], [-1, 0], [0, 1], [0, -1]]) # 4 movement dirs
-    action_to_code = dict(zip(map(tuple,_vecs),[(0, 0),(0, 1), (1, 0), (1, 1)]))
+    _vecs = numpy.array([[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) # 4 movement dirs
+    action_to_code = dict(zip(map(tuple,_vecs),[(0, 0),(0, 1), (1, 0), (1, 1),(0,2)]))
     code_to_action = dict(zip(action_to_code.values(), action_to_code.keys()))
 
     def __init__(self, wall_matrix, goal_matrix, init_state = None, uniform = False):
