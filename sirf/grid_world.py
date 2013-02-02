@@ -185,12 +185,11 @@ class RandomPolicy:
 
 class MDP:
     
-    def __init__(self, environment=None, policy=None, walls_on = True):
+    def __init__(self, environment=None, policy=None, walls_on = True, size = 9):
         self.env = environment
         self.policy = policy
 
         if environment is None:
-            size = 9
             goals = numpy.zeros((size,size))
             goals[1,1] = 1
             print 'goal position: ', goals.nonzero()
@@ -251,10 +250,10 @@ class MDP:
 
             print 'sampling with a policy distribution'
 
-            states = numpy.zeros((n_samples+1,2), dtype = numpy.int)
+            states = numpy.zeros((n_samples+1,2), dtype = numpy.float)
             states[0] = self.env.state
-            actions = numpy.zeros((n_samples+1,2), dtype = numpy.int)
-            rewards = numpy.zeros(n_samples, dtype = numpy.int)
+            actions = numpy.zeros((n_samples+1,2), dtype = numpy.float)
+            rewards = numpy.zeros(n_samples, dtype = numpy.float)
 
             for i in xrange(n_samples):
                     
@@ -284,12 +283,13 @@ class MDP:
 
     def sample_grid_world(self, n_samples, state_rep = 'tabular', 
                                                 distribution = 'policy'):
-        ''' returns a matrix X whos rows are samples from the grid world mdp
+        ''' returns samples from the grid world mdp
         using state_rep for the features and sampling from the given 
-        distribution type, either on-policy or uniform (one-step). Rows
-        of X are in the form [s,s',r,a]'''
-
-        states, states_p, actions, actions_p, rewards = self._sample(n_samples, distribution)
+        distribution type, either on-policy or uniform (one-step). samples are
+        returned in the form [s,s',r,a]'''
+        rewards = 0
+        while numpy.sum(rewards) == 0:
+            states, states_p, actions, actions_p, rewards = self._sample(n_samples, distribution)
 
         if state_rep == 'tabular':
             n_state_var = self.env.n_states
@@ -302,13 +302,13 @@ class MDP:
 
             if state_rep == 'tabular':
                 X[i,self.env.state_to_index(states[i,:])] = 1
-                X[i,n_state_var + self.env.state_to_index(states_p)] = 1
+                X[i,n_state_var + self.env.state_to_index(states_p[i,:])] = 1
                 X[i,2*n_state_var] = rewards[i]
                 X[i,2*n_state_var + 1:] = self.env.action_to_code[tuple(actions[i,:])]
 
             elif state_rep == 'factored':
                 state = states[i,:]
-                state_p = states[i,:]
+                state_p = states_p[i,:]
                 
                 # todo add standard encoding function
                 # encode row and col position
@@ -319,11 +319,11 @@ class MDP:
                 X[i,2*n_state_var] = rewards[i]     
                 X[i,2*n_state_var + 1:] = self.env.action_to_code[tuple(actions[i,:])]
 
-        return X
+        return X[:,:n_state_var], X[:,n_state_var:2*n_state_var], X[:,2*n_state_var:2*n_state_var+1], X[:,2*n_state_var + 1:]
 
 def main():
     mdp = MDP()
-    X = mdp.sample_grid_world(100)
+    s, sp, r, a = mdp.sample_grid_world(100)
     R = mdp.env.R
     P = mdp.env.P
 
