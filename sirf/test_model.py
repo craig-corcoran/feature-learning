@@ -5,7 +5,6 @@ from scipy.optimize import fmin_cg
 from dbel import Model
 from bellman_basis import plot_features, SIBasis
 import matplotlib.pyplot as plt
-import scipy.sparse
 
 def main():
     mdp = grid_world.MDP(walls_on = True)    
@@ -81,6 +80,15 @@ def simultaneous_iteration(k = 16, eps = 1e-8, lr = 1e-3):
 
     plot_features(phi)
     plt.show()
+
+def covariance_loss_experiment(k = 16):
+    mdp = grid_world.MDP(walls_on = True)    
+    m = Model(mdp.env.R, mdp.env.P)
+
+    P = m.P
+    phi = m.R[:,None]
+
+    b = Basis(n,k)
 
 def test_si_basis(n = 81, k = 16, patience = 1, gam = 1-1e-4, 
             max_iter = None, mb_size = 500, env_size = 9, weighting = 'policy'):
