@@ -1,7 +1,10 @@
 import copy
+import itertools
+import plac
 import cPickle as pickle
 import numpy
 import grid_world
+import scipy.sparse
 from dbel import Model
 from bellman_basis import BellmanBasis as Basis
 from scipy.optimize import fmin_cg
@@ -12,11 +15,35 @@ import util
 # add tracking of reward and model loss along with bellman error
 # mark shifts and best theta
 
-def main(k = 16, env_size = 15, gam = 1-1e-3, beta = 0.99, lam = 0., eps = 1e-5, 
-    partition = None, patience = 15, max_iter = 15, weighting = 'policy', 
-    reg = ('l1-theta', 5e-2), 
-    loss_types = ['covariance'],
-    grad_vars = ['model']):
+@plac.annotations(
+    k=('number of features', 'option', 'k', int),
+    env_size=('size of the grid world', 'option', 's', int),
+    lam=('lambda for TD-lambda training', 'option', None, float),
+    gam=('discount factor', 'option', 'g', float),
+    beta=('covariance loss paramter', 'option', None, float),
+    eps=('epsilon for computing TD-lambda horizon', 'option', None, float),
+    patience=('train until patience runs out', 'option', 'p', int),
+    max_iter=('train for at most this many iterations', 'option', 'i', int),
+    weighting=('method for sampling from grid world', 'option', None, str, ['policy', 'uniform']),
+    loss_types=('train on these losses in this order', 'option', None, str),
+    grad_vars=('compute gradient using these variables', 'option', None, str),
+    nonlin=('feature nonlinearity', 'option', 'n', str, ['sigmoid', 'relu']),
+    )
+def main(k = 16,
+         env_size = 15,
+         lam = 0.,
+         gam = 0.999,
+         beta = 0.99,
+         eps = 1e-5, 
+         partition = None,
+         patience = 15,
+         max_iter = 15,
+         weighting = 'policy', 
+         reg = ('l1-theta', 5e-2), 
+         loss_types = 'covariance bellman',
+         grad_vars = 'model',
+         nonlin = None,
+         ):
 
     beta_ratio = beta/gam 
 
@@ -30,17 +57,17 @@ def main(k = 16, env_size = 15, gam = 1-1e-3, beta = 0.99, lam = 0., eps = 1e-5,
     m.gam = gam
 
     print 'constructing basis'
-    bb = Basis(n, k, beta_ratio, partition = partition, reg_tuple = reg)
+    bb = Basis(n, k, beta_ratio, partition = partition, reg_tuple = reg, nonlin = nonlin)
     bb.theta[:,-1] = m.R # initialize the last column as the reward function
-    
+
     R = numpy.array([])
-    X = numpy.eye(n) # build dataset
-    P = numpy.eye(n)
+    X = scipy.sparse.eye(n, n) # build dataset
+    P = scipy.sparse.eye(n, n)
     n_steps = bb._calc_n_steps(lam, gam, eps)
     for i in xrange(n_steps): # decay epsilon 
-        R = numpy.append(R, numpy.dot(P, m.R))
-        P = numpy.dot(m.P, P)
-        X = numpy.vstack((X, numpy.dot(P, numpy.eye(n)))) # todo insert other basis here
+        R = numpy.append(R, P * m.R)
+        P = m.P * P
+        X = scipy.sparse.vstack((X, P)) # todo insert other basis here
     R = R[:,None]
         
     # build bellman operator matrices
@@ -55,7 +82,7 @@ def main(k = 16, env_size = 15, gam = 1-1e-3, beta = 0.99, lam = 0., eps = 1e-5,
     #print 'PHI_full', PHI_full
     #print 'Rlam: ', Rlam
 
-    phases = zip(loss_types, grad_vars)
+    phases = zip(loss_types.split(), itertools.cycle(grad_vars.split()))
 
     test_loss = numpy.array([])
     test_be = numpy.array([])
@@ -91,7 +118,7 @@ def main(k = 16, env_size = 15, gam = 1-1e-3, beta = 0.99, lam = 0., eps = 1e-5,
     out_path = 'covariance_results.k=%i.reg=%s.lam=%s.%s.size=%i.pickle.gz' % (k, str(reg), str(lam), weighting, env_size)
     with util.openz(out_path, "wb") as out_file:
         pickle.dump((test_loss, test_be, true_be, true_lsq), out_file, protocol = -1)
-    
+
     # plot basis functions
     plot_features(bb.theta)
     plt.savefig('basis.k=%i.reg=%s.lam=%s.b=%s.%s.pdf' % (k, str(reg), str(lam), str(beta), weighting)) # add gam etc to string?
@@ -114,20 +141,26 @@ def plot_value_functions(size, m, b):
     
     # todo something wrong with model vf?
     # true model value fn
-    f.add_subplot(311)
-    plt.imshow(numpy.reshape(m.V, (size, size)), cmap = 'gray', interpolation = 'nearest')
+    ax = f.add_subplot(311)
+    ax.imshow(numpy.reshape(m.V, (size, size)), cmap = 'gray', interpolation = 'nearest')
+    ax.set_xticks([])
+    ax.set_yticks([])
 
     # bellman error estimate (using true model)
-    f.add_subplot(312)
+    ax = f.add_subplot(312)
     w_be = m.get_lstd_weights(b.theta) # TODO add lambda parameter here
     v_be = numpy.dot(b.theta, w_be)
-    plt.imshow(numpy.reshape(v_be, (size, size)), cmap = 'gray', interpolation = 'nearest')
+    ax.imshow(numpy.reshape(v_be, (size, size)), cmap = 'gray', interpolation = 'nearest')
+    ax.set_xticks([])
+    ax.set_yticks([])
     
     # least squares solution with true value function
-    f.add_subplot(313)
+    ax = f.add_subplot(313)
     w_lsq = numpy.linalg.lstsq(b.theta, m.V)[0]
     v_lsq = numpy.dot(b.theta, w_lsq)
-    plt.imshow(numpy.reshape(v_lsq, (size, size)), cmap = 'gray', interpolation = 'nearest')
+    ax.imshow(numpy.reshape(v_lsq, (size, size)), cmap = 'gray', interpolation = 'nearest')
+    ax.set_xticks([])
+    ax.set_yticks([])
 
     print 'bellman error norm from v: ', numpy.linalg.norm(m.V - v_be)
     print 'lsq error norm from v: ', numpy.linalg.norm(m.V - v_lsq)
@@ -135,15 +168,14 @@ def plot_value_functions(size, m, b):
 def plot_learning_curves(losses, labels, draw_styles = ['r-','g-','b-','k-']):
     plt.clf()
     ax = plt.axes()
-    n_losses = len(losses)
-    
     print losses, labels, draw_styles
-    for i in xrange(n_losses):
-        x = range(len(losses[i]))
-        ax.plot(x, losses[i]/numpy.xmean(losses[i]), draw_styles[i], label=labels[i])
+    z = max(l.max() for l in losses)
+    for i, l in enumerate(losses):
+        x = range(len(l))
+        ax.plot(x, l / z, draw_styles[i], label=labels[i])
 
-    plt.ylim(ymax=3)
-    plt.title('Mean Normalized Losses per CG Minibatch')
+    plt.ylim(0, 1)
+    plt.title('Normalized Losses per CG Minibatch')
     plt.legend()
     #handles, labels = ax.get_legend_handles_labels()
     #ypos = numpy.array([numpy.zeros_like(switch), numpy.ones_like(switch)])
@@ -172,7 +204,7 @@ def train_basis(basis, model, S, R, S_test, R_test, Mphi, Mrew, patience,
             delta = numpy.linalg.norm(old_theta-basis.theta)
             print 'delta theta: ', delta
 
-            print 'normalizing columns; pre norms: ', numpy.apply_along_axis(numpy.linalg.norm, 0, basis.theta)
+            print 'normalizing columns; pre norms: ', numpy.apply_along_axis(numpy.linalg.norm, 0, basis.theta).mean()
             basis.theta = numpy.apply_along_axis(lambda v: v/numpy.linalg.norm(v), 0, basis.theta)
             
             err = basis.loss(basis.theta, S_test, R_test, Mphi, Mrew) #basis.loss_be(basis.theta, S_test, Sp_test, R_test)  
@@ -198,12 +230,4 @@ def train_basis(basis, model, S, R, S_test, R_test, Mphi, Mrew, patience,
     return basis, test_loss, test_be, true_be, true_lsq
 
 if __name__ == '__main__':
-    main()
-
-
-
-    
-
-    
-
-
+    plac.call(main)
