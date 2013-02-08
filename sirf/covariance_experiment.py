@@ -12,7 +12,7 @@ import util
 # add tracking of reward and model loss along with bellman error
 # mark shifts and best theta
 
-def main(k = 16, env_size = 15, lam = 0., gam = 1-1e-4, beta = 0.99, eps = 1e-5, 
+def main(k = 16, env_size = 15, gam = 1-1e-3, beta = 0.99, lam = 0., eps = 1e-5, 
     partition = None, patience = 15, max_iter = 15, weighting = 'policy', 
     reg = ('l1-theta', 5e-2), 
     loss_types = ['covariance'],

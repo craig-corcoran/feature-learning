@@ -10,12 +10,12 @@ import theano.sandbox.linalg
 import matplotlib.pyplot as plt
 import grid_world
 from scipy.optimize import fmin_cg
-from dbel import Model
+from rl import Model
 
 class BellmanBasis:
 
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None,
-            reg_tuple = None, partition = None, wrt = 'all'):
+            reg_tuple = None, partition = None, wrt = 'all', shift = 1e-6):
         
         self.n = n # dim of data
         self.k = k # num of features/columns
@@ -46,6 +46,7 @@ class BellmanBasis:
         self.Mphi_t = TT.dmatrix('M_phi') # mixing matrix for PHI_lam
         self.Mrew_t = TT.dmatrix('M_rew') # mixing matrix for reward_lambda
         self.beta_t = theano.shared(beta) # multiplier on gamma set by env
+        self.shift_t = theano.shared(shift)
 
         # encode s and mix lambda components
         self.PHI_full_t = TS.structured_dot(self.S_t, self.theta_t)
@@ -54,12 +55,19 @@ class BellmanBasis:
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T #xxx
 
         self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) 
-        self.cov_inv = theano.sandbox.linalg.matrix_inverse(self.cov)
+        self.cov_inv = theano.sandbox.linalg.matrix_inverse( TS.structured_add( 
+                self.cov, self.shift_t * TS.square_diagonal(TT.ones((k,))))) # l2 reg to avoid sing matrix
 
         # dictionary mapping loss funcs/grads to names
         self.d_losses = {
             'bellman': self.bellman_funcs, 'model': self.model_funcs, 
             'reward': self.reward_funcs, 'covariance':self.covariance_funcs}
+
+        # init functions for tracking bellman error components
+        self.grad_var = self.d_partition['all']
+        self.loss_be, self.grad_be = self.d_losses['bellman']()
+        self.loss_r, self.grad_r = self.d_losses['reward']()
+        self.loss_m, self.grad_m = self.d_losses['model']()
 
         self.set_loss(loss_type, wrt)
         self.set_regularizer(reg_tuple)
@@ -115,9 +123,13 @@ class BellmanBasis:
 
         # lstd weights for bellman error using normal eqns
         b = TT.dot(self.PHI0_t.T, self.Rlam_t)
-        a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t))
+        theano.sandbox.linalg.matrix_inverse( TS.structured_add( 
+                self.cov, self.shift_t * TS.square_diagonal(TT.ones((self.k,)))))
+        a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) 
+        A = theano.sandbox.linalg.matrix_inverse( TS.structured_add( \
+                 a, self.shift_t * TS.square_diagonal(TT.ones((self.k,))))) # l2 reg to avoid sing matrix
         #w_lstd = theano.sandbox.linalg.solve(a,b) # solve currently has no gradient implemented
-        w_lstd = TT.dot(theano.sandbox.linalg.matrix_inverse(a), b)
+        w_lstd = TT.dot(theano.sandbox.linalg.matrix_inverse(A), b)
         e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), w_lstd) # error vector
         Lbe = TT.sqrt(TT.sum(TT.sqr(e_be))) # need sqrt?
         Lbe_grad = theano.grad(Lbe, [self.grad_var])[0]
@@ -201,30 +213,33 @@ class BellmanBasis:
 
         return n_time_steps
 
-    def get_mixing_matrices(self, m, lam, gam, sampled = True, eps = 1e-5):
+    def get_mixing_matrices(self, m, lam, gam, sampled = True, eps = 1e-5, dim = None):
         ''' returns a matrix for combining feature vectors from different time
         steps for use in TD(lambda) algorithms. m is the number of final
-        samples/states, and n_steps is the number of extra time steps. Here we
-        use only all m+n_step updates; slightly different than recursive TD
+        rows/samples, dim is the dimension (equal to m and not needed if not
+        sampled), and n_steps is the number of extra time steps. Here we use
+        only all m+n_step updates; slightly different than recursive TD
         algorithm, which uses all updates from all samples '''
+
         n_steps = self._calc_n_steps(lam, gam, eps = eps)
         vec = map(lambda i: (lam*gam)**i, xrange(n_steps)) # decaying weight vector
         if sampled:
-            M = numpy.zeros((m, m + n_steps))
+            assert dim is not None
+            M = numpy.zeros((m, m + n_steps-1))
             for i in xrange(m): # for each row
                 M[i, i:i+n_steps] = vec
             m_phi = numpy.hstack((numpy.zeros((m,1)), M))
+            #print 'mphi shape: ', m_phi.shape
 
         else:
             M = numpy.zeros((m, m * n_steps))
             for i in xrange(m): # xxx optimize
                 for j in xrange(n_steps):
                     M[i, i + j*m] = vec[j]
-
             m_phi = numpy.hstack((numpy.zeros((m,m)), M))
-
-        m_phi = (1-lam) * gam * m_phi
+        
         m_rew = M
+        m_phi = (1-lam) * gam * m_phi
         return m_phi, m_rew
 
     def encode(self, S):
@@ -262,6 +277,7 @@ class BellmanBasis:
         if theta is None:
             theta = self.theta
         return numpy.reshape(theta, (self.n, self.k))
+
 
 def plot_features(phi, r = None, c = None):
     

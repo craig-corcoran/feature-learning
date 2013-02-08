@@ -183,6 +183,31 @@ class RandomPolicy:
     def choose_action(self, actions):
         return choice(list(actions))
 
+class OptimalPolicy:
+    ''' acts according to the value function of a random agent - should be 
+    sufficient in grid world'''
+
+    def __init__(self, env, m):
+        self.env = env
+        self.m = m
+        self.v = m.V
+    
+
+    def choose_action(self, actions):
+        
+        max_val = -numpy.inf
+        act = None
+        for a in actions:
+            next_s = self.env.next_state(a)
+            next_s = self.env.state_to_index(next_s)
+            val = self.v[next_s]
+            if val > max_val:
+                act = a
+                max_val = val
+        assert act is not None
+
+        return act
+
 class MDP:
     
     def __init__(self, environment=None, policy=None, walls_on = True, size = 9):
