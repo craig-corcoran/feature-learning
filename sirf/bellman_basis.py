@@ -94,9 +94,9 @@ class BellmanBasis:
                 print self.reg_type 
                 assert False
             
-            Lreg_grad = theano.grad(Lreg, [self.grad_var])
-            self.reg_func = theano.function([self.theta_t, self.S_t, self.Mphi_t], Lreg)
-            self.reg_grad = theano.function([self.theta_t, self.S_t, self.Mphi_t], Lreg_grad)
+            Lreg_grad = theano.grad(Lreg, [self.grad_var])[0]
+            self.reg_func = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lreg, on_unused_input='ignore')
+            self.reg_grad = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lreg_grad, on_unused_input='ignore')
         else: self.reg_type = None
 
     def set_loss(self, loss_type, wrt):
@@ -129,7 +129,7 @@ class BellmanBasis:
 
     def reward_funcs(self):
         
-        # reward loss: ||PHI0 (PHI0.T * PHI0)^-1 PHI0.T * Rlam - Rlam||
+        # reward loss: ||(PHI0 (PHI0.T * PHI0))^-1 PHI0.T * Rlam - Rlam||
         d = TT.dot(self.PHI0_t.T, self.Rlam_t)
         w_r = TT.dot(self.cov_inv, d)
         e_r = self.Rlam_t - TT.dot(self.PHI0_t, w_r)
@@ -161,7 +161,6 @@ class BellmanBasis:
         A = self.cov - self.beta_t * TT.dot(self.PHI0_t.T,self.PHIlam_t)
         Lc = TT.sum(TT.abs_(A))
         Lc_grad = theano.grad(Lc, [self.grad_var])[0]
-
         
         loss_c = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lc, on_unused_input='ignore')
         grad_c = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lc_grad, on_unused_input='ignore')
@@ -172,8 +171,10 @@ class BellmanBasis:
         
         theta = self._reshape_theta(theta)
         loss =  self.loss_func(theta, S, R, Mphi, Mrew)
+        #print 'loss pre reg: ', loss
         if self.reg_type is not None:
-            loss += self.reg_param * self.reg_func(theta, S, R, Mphi, Mrew)
+            loss += (self.reg_param * self.reg_func(theta, S, R, Mphi, Mrew))
+            #print 'loss post reg: ', loss
         return loss / (S.shape[0] * self.n) # norm loss by num samples and dim of data
         
     def grad(self, theta, S, R, Mphi, Mrew):
@@ -181,7 +182,7 @@ class BellmanBasis:
         theta = self._reshape_theta(theta)
         grad = self.loss_grad(theta, S, R, Mphi, Mrew)
         if self.reg_type is not None:
-            grad += self.reg_param * self.reg_grad(theta, S, R, Mphi, Mrew)
+            grad += (self.reg_param * self.reg_grad(theta, S, R, Mphi, Mrew))
         grad = grad / (S.shape[0] * self.n) # norm grad by num samples and dim of data
         if self.wrt is 'all':
             return grad.flatten()
@@ -262,178 +263,49 @@ class BellmanBasis:
             theta = self.theta
         return numpy.reshape(theta, (self.n, self.k))
 
-# TODO add bellman basis tests
-
-
-
-
-def test_theano_basis(n = 81, k = 9, k_r = 1, lam = 0.95, mb_size = 5000, reconstructive = False,
-        reg_type = 'l1-theta', reg_param = 0., max_iter = 2, weighting = 'policy', decay_eps = 1e-3, patience = 5):
-    
-    theano.config.warn.subtensor_merge_bug = False
-
-    mdp = grid_world.MDP(walls_on = True)    
-    #mdp.policy = OptimalPolicy(mdp.env, m)
-    m = Model(mdp.env.R, mdp.env.P) 
-
-    theta0 = 1e-8 * numpy.random.standard_normal(n*k)
-    if reconstructive:
-        theta0 = numpy.apply_along_axis(lambda v: v/numpy.linalg.norm(v), 0, theta0)
-
-    b = Basis(n, k, theta = theta0, batch_size = mb_size, loss_type = 'bellman', 
-       reconstructive = reconstructive , reg_type = reg_type, reg_param = reg_param, 
-         wrt = 'all', partition = (['reward','model'],[k_r, k-k_r]))
-    
-    # sample the hold out test set
-    #X = mdp.sample_grid_world(mb_size + n_time_steps + 1, distribution = weighting) 
-    #numpy.random.shuffle(X)
-    #X = scipy.sparse.csr_matrix(X[:,:-2], dtype = numpy.float64) # throw out the actions
-    s_test, sp_test, r_test, _, = mdp.sample_grid_world(mb_size + n_time_steps, distribution = weighting)
-    s_test = numpy.vstack((s_test, sp_test[-1,:]))
-    #n_vars = (X.shape[1]-1)/2.
-    #s_test = X[:,:n_vars]
-    ##s_p_test = X[:,n_vars:-1]
-    #r_test = X[:-1,-1] 
-
-    print 'building mixing matrix'
-    m_phi, m_rew = b.get_mixing_matrix(mb_size, n_time_steps, lam, m.gam)
-
-    sample_be = numpy.zeros(1, dtype = numpy.float64)
-    true_be = numpy.zeros(1, dtype = numpy.float64)
-    true_lsq = numpy.zeros(1, dtype = numpy.float64)
-    
-    sample_be[0] = b.loss_be(b.theta, s_test, r_test, m_phi, m_rew)
-    true_be[0] = m.bellman_error(b.theta, weighting = weighting)
-    true_lsq[0] = m.value_error(b.theta, weighting = weighting)
-
-    loss_types = ['reward', 'model', 'bellman']
-    grad_parts = ['reward', 'model', 'all']
-    
-
- 
-    cnt = 1
-    for i,lt in enumerate(loss_types):
-        
-        print '\n \nusing %s loss, wrt %s' % (lt,grad_parts[i])
-        print 'reconstructive: ', reconstructive
-        b.set_loss(lt)
-        b.set_grad(grad_parts[i])
-        #running_avg = 1
-        best_test_loss = numpy.inf
-        n_test_inc = 0
-    
-        #while running_avg > train_eps:
-        while n_test_inc < patience:
-            
-            print 'minibatch: ', cnt
-            
-            s, sp, r, _, = mdp.sample_grid_world(mb_size + n_time_steps + 1, distribution = weighting)
-            s = numpy.vstack((s, sp[-1,:]))
-            #X = mdp.sample_grid_world(mb_size + n_time_steps + 1, distribution = weighting) 
-            #X = scipy.sparse.csr_matrix(X[:,:-2], dtype = numpy.float64) 
-            #s = X[:,:n_vars]
-            #r = X[:-1,-1]
-            
-
-            if cnt == 1:
-                print 'initial sample loss: ', b.loss_be(b.theta, s, r, m_phi, m_rew)
-                print 'initial true bellman error: ', m.bellman_error(b.theta)
-            
-            print 'performing minibatch optimization'
-            theta_old = copy.deepcopy(b.theta)
-            b.set_theta( fmin_cg(b.loss, b.theta.flatten(), b.grad,
-                                    args = (s, r, m_phi, m_rew),
-                                    full_output = False,
-                                    maxiter = max_iter, 
-                                    gtol = 1e-8) )
-
-            delta = numpy.linalg.norm(b.theta - theta_old)
-            print 'change in theta: ', delta
-            #running_avg = running_avg * (1-alpha) + delta * alpha
-            
-            #print 'running average of delta', running_avg
-            test_loss = b.loss(b.theta, s, r, m_phi, m_rew)#b.loss_be(b.theta, s_test, r_test, m_phi, m_rew)
-            if test_loss < best_test_loss:
-                best_test_loss = test_loss
-                best_theta = b.theta
-                n_test_inc = 0
-                print 'new best'
-            else:
-                n_test_inc += 1
-                print 'iters without better loss: ', n_test_inc
-
-            sample_be = numpy.hstack((sample_be, test_loss)) # TODO add true bellman error for reconstructive feats
-            true_be = numpy.hstack((true_be, m.bellman_error(b.theta, weighting = weighting)))
-            true_lsq = numpy.hstack((true_lsq,  m.value_error(b.theta, weighting = weighting)))
-
-            print 'sample BE loss: ', sample_be[cnt]
-            print 'true BE : ', true_be[cnt], '\n'
-
-            cnt += 1
-
-        b.theta = best_theta
-
-        #plot_features(b.theta)
-        #plt.show()
-    
-    # plot basis functions
-    plot_features(b.theta)
-    plt.savefig('basis.k=%i.%s.pdf' % (k, weighting))
-    
-    # plot learning curve
-    #plt.figure()
-    plt.clf()
-    ax = plt.axes()
-    x = range(len(sample_be))
-    ax.plot(x, sample_be/max(sample_be), 'r-', x, true_be/max(true_be), 'g-', x, true_lsq / max(true_lsq), 'b-')
-    ax.legend(['Test BE','True BE','True RMSE'])
-    plt.savefig('loss.k=%i.%s.pdf' % (k, weighting))
-
-    # plot value functions, true and approx
-    plt.clf()
-    f = plt.figure()
-    side = numpy.sqrt(n)
-    
-    # true model value fn
-    f.add_subplot(311)
-    plt.imshow(numpy.reshape(m.V, (side, side)), cmap = 'gray', interpolation = 'nearest')
-
-    # bellman error estimate (using true model)
-    f.add_subplot(312)
-    basis = b.theta
-    w_be = m.get_lstd_weights(basis)
-    v_be = numpy.dot(basis, w_be)
-    plt.imshow(numpy.reshape(v_be, (side, side)), cmap = 'gray', interpolation = 'nearest')
-    
-    # least squares solution with true value function
-    f.add_subplot(313)
-    w_lsq = numpy.linalg.lstsq(basis, m.V)[0]
-    v_lsq = numpy.dot(basis, w_lsq)
-    plt.imshow(numpy.reshape(v_lsq, (side, side)), cmap = 'gray', interpolation = 'nearest')
-    plt.savefig('value.k=%i.%s.pdf' % (k, weighting))
-
 def plot_features(phi, r = None, c = None):
- 
+    
+    plt.clf()
     j,k = phi.shape
     if r is None:
         r = c = numpy.round(numpy.sqrt(j))
         assert r*c == j
         
-    m = numpy.floor(numpy.sqrt(k))
-    n = numpy.ceil(k/float(m))
+    m = int(numpy.floor(numpy.sqrt(k)))
+    n = int(numpy.ceil(k/float(m)))
     assert m*n >= k 
-
-    f = plt.figure()
-    for i in xrange(k):
+    
+    print 'n: ', n
+    F = None
+    for i in xrange(m):
         
-        u = numpy.floor(i / m) 
-        v = i % n
+        slic = phi[:,n*i:n*(i+1)]
+        if i == 0:
+            F = _stack_feature_row(slic, r, c)
+        else:
+            F = numpy.vstack((F, _stack_feature_row(slic, r, c)))
         
-        im = numpy.reshape(phi[:,i], (r,c))
-        ax = f.add_axes([float(u)/m, float(v)/n, 1./m, 1./n])
-        ax.imshow(im, cmap = 'gray', interpolation = 'nearest')
+    
+    F = F.astype(numpy.float64)
+    v = 2*numpy.mean(numpy.abs(F)) # numpy.max(abs(F)) #
+    plt.imshow(F, cmap='gray', interpolation = 'nearest', vmin = -v, vmax = v)
+    plt.axis('off')    
+    plt.colorbar()
+        
 
-    #plt.colorbar()
+def _stack_feature_row(phi_slice, r, c):
+    
+    for i in xrange(phi_slice.shape[1]):
+    
+        im = numpy.reshape(phi_slice[:,i], (r,c))
+        I = 0.3*numpy.ones((r+2,c+2)) # pad with white value
+        I[1:-1,1:-1] = im
+        if i == 0:
+            F = I
+        else:
+            F = numpy.hstack((F,I))
+    return F
+    
             
 
 if __name__ == '__main__':

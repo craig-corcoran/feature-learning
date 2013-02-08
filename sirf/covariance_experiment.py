@@ -9,10 +9,16 @@ from bellman_basis import plot_features
 import matplotlib.pyplot as plt
 import util
 
-def main(k = 16, env_size = 15, lam = 0., gam = 1-1e-4, beta = 0.999, eps = 1e-5, 
-    partition = None, patience = 15, max_iter = 15, weighting = 'policy'):
-        
-    beta = beta/gam # just trust me
+# add tracking of reward and model loss along with bellman error
+# mark shifts and best theta
+
+def main(k = 16, env_size = 15, lam = 0., gam = 1-1e-4, beta = 0.99, eps = 1e-5, 
+    partition = None, patience = 15, max_iter = 15, weighting = 'policy', 
+    reg = ('l1-theta', 5e-2), 
+    loss_types = ['covariance'],
+    grad_vars = ['model']):
+
+    beta_ratio = beta/gam 
 
     if partition is None:
         partition = {'reward':1, 'model':k-1}        
@@ -24,8 +30,8 @@ def main(k = 16, env_size = 15, lam = 0., gam = 1-1e-4, beta = 0.999, eps = 1e-5
     m.gam = gam
 
     print 'constructing basis'
-    bb = Basis(n, k, beta, partition = partition)
-    bb.theta[:,0] = m.R # initialize the first column as the reward function
+    bb = Basis(n, k, beta_ratio, partition = partition, reg_tuple = reg)
+    bb.theta[:,-1] = m.R # initialize the last column as the reward function
     
     R = numpy.array([])
     X = numpy.eye(n) # build dataset
@@ -49,8 +55,6 @@ def main(k = 16, env_size = 15, lam = 0., gam = 1-1e-4, beta = 0.999, eps = 1e-5
     #print 'PHI_full', PHI_full
     #print 'Rlam: ', Rlam
 
-    loss_types = ['covariance']
-    grad_vars = ['model']
     phases = zip(loss_types, grad_vars)
 
     test_loss = numpy.array([])
@@ -62,7 +66,8 @@ def main(k = 16, env_size = 15, lam = 0., gam = 1-1e-4, beta = 0.999, eps = 1e-5
         lt, wrt = ph
         try:
             print 'training with %s loss with respect to %s vars' % (lt,wrt)
-            bb.set_loss(loss_type=lt, wrt='model')
+            bb.set_loss(loss_type=lt, wrt=wrt)
+            bb.set_regularizer(reg)
             
             theta_old = copy.deepcopy(bb.theta)
             bb, tel, teb, trb, trq = train_basis(bb, m, X, R, X, R, 
@@ -83,24 +88,23 @@ def main(k = 16, env_size = 15, lam = 0., gam = 1-1e-4, beta = 0.999, eps = 1e-5
             print '\n user stopped current training loop'
 
     # save results!
-    out_path = 'covariance_results.k=%i.lam=%s.%s.size=%i.pickle.gz' % (k, str(0.), weighting, env_size)
+    out_path = 'covariance_results.k=%i.reg=%s.lam=%s.%s.size=%i.pickle.gz' % (k, str(reg), str(lam), weighting, env_size)
     with util.openz(out_path, "wb") as out_file:
         pickle.dump((test_loss, test_be, true_be, true_lsq), out_file, protocol = -1)
     
     # plot basis functions
-    plt.clf()
     plot_features(bb.theta)
-    plt.savefig('basis.k=%i.lam=%s.b=%s.%s.pdf' % (k, str(lam), str(beta), weighting)) # add gam etc to string?
+    plt.savefig('basis.k=%i.reg=%s.lam=%s.b=%s.%s.pdf' % (k, str(reg), str(lam), str(beta), weighting)) # add gam etc to string?
     
     # plot learning curves
     plot_learning_curves(numpy.array([test_loss, test_be, true_be, true_lsq]), 
                          ['test loss', 'test BE', 'true BE', 'true lsq'],
                          ['r-','g-','b-','k-'])
-    plt.savefig('loss.k=%i.lam=%s.b=%s.%s.pdf' % (k, str(lam), str(beta), weighting))
+    plt.savefig('loss.k=%i.reg=%s.lam=%s.b=%s.%s.pdf' % (k, str(reg), str(lam), str(beta), weighting))
     
     # plot value functions
     plot_value_functions(env_size, m, bb)
-    plt.savefig('value.k=%i.lam=%s.b=%s.%s.pdf' % (k, str(lam), str(beta), weighting))
+    plt.savefig('value.k=%i.reg=%s.lam=%s.b=%s.%s.pdf' % (k, str(reg), str(lam), str(beta), weighting))
 
 
 def plot_value_functions(size, m, b):
@@ -136,11 +140,11 @@ def plot_learning_curves(losses, labels, draw_styles = ['r-','g-','b-','k-']):
     print losses, labels, draw_styles
     for i in xrange(n_losses):
         x = range(len(losses[i]))
-        ax.plot(x, losses[i]/numpy.mean(losses[i]), draw_styles[i], label=labels[i])
+        ax.plot(x, losses[i]/numpy.xmean(losses[i]), draw_styles[i], label=labels[i])
 
-    ax.ylim(ymax=3)
-    ax.title('Loss normalized by mean')
-    ax.legend()
+    plt.ylim(ymax=3)
+    plt.title('Mean Normalized Losses per CG Minibatch')
+    plt.legend()
     #handles, labels = ax.get_legend_handles_labels()
     #ypos = numpy.array([numpy.zeros_like(switch), numpy.ones_like(switch)])
     #ax.plot(numpy.array([switch,switch]), ypos, 'k-') # draw switch positions and best theta
