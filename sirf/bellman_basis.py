@@ -15,7 +15,7 @@ from rl import Model
 class BellmanBasis:
 
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None,
-            reg_tuple = None, partition = None, wrt = 'all', shift = 1e-6):
+            reg_tuple = None, partition = None, wrt = 'all', shift = 1e-6, nonlin = None):
         
         self.n = n # dim of data
         self.k = k # num of features/columns
@@ -23,6 +23,7 @@ class BellmanBasis:
 
         if theta is None: 
             theta = 1e-6 * numpy.random.standard_normal((self.n, self.k))
+            theta /= numpy.sqrt((theta * theta).sum(axis=0))
             # initialize features sparsely
             #sparsity = 0.8
             #for i in xrange(self.k):
@@ -49,7 +50,8 @@ class BellmanBasis:
         self.shift_t = theano.shared(shift)
 
         # encode s and mix lambda components
-        self.PHI_full_t = TS.structured_dot(self.S_t, self.theta_t)
+        d_nonlin = dict(sigmoid=TT.nnet.sigmoid, relu=lambda z: TT.maximum(0, z))
+        self.PHI_full_t = d_nonlin.get(nonlin, lambda z: z)(TS.structured_dot(self.S_t, self.theta_t))
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
         self.PHI0_t = self.PHI_full_t[0:self.PHIlam_t.shape[0],:]
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T #xxx
