@@ -28,6 +28,7 @@ import util
     loss_types=('train on these losses in this order', 'option', None, str),
     grad_vars=('compute gradient using these variables', 'option', None, str),
     nonlin=('feature nonlinearity', 'option', 'n', str, ['sigmoid', 'relu']),
+    nonzero=('penalty for zero theta vectors', 'option', None, float),
     )
 def main(k = 16,
          env_size = 15,
@@ -43,6 +44,7 @@ def main(k = 16,
          loss_types = 'covariance bellman',
          grad_vars = 'model',
          nonlin = None,
+         nonzero = None,
          ):
 
     beta_ratio = beta/gam 
@@ -57,7 +59,7 @@ def main(k = 16,
     m.gam = gam
 
     print 'constructing basis'
-    bb = Basis(n, k, beta_ratio, partition = partition, reg_tuple = reg, nonlin = nonlin)
+    bb = Basis(n, k, beta_ratio, partition = partition, reg_tuple = reg, nonlin = nonlin, nonzero = nonzero)
     bb.theta[:,-1] = m.R # initialize the last column as the reward function
 
     R = numpy.array([])
@@ -169,10 +171,9 @@ def plot_learning_curves(losses, labels, draw_styles = ['r-','g-','b-','k-']):
     plt.clf()
     ax = plt.axes()
     print losses, labels, draw_styles
-    z = max(l.max() for l in losses)
     for i, l in enumerate(losses):
         x = range(len(l))
-        ax.plot(x, l / z, draw_styles[i], label=labels[i])
+        ax.plot(x, l / l.max(), draw_styles[i], label=labels[i])
 
     plt.ylim(0, 1)
     plt.title('Normalized Losses per CG Minibatch')
