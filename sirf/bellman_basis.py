@@ -41,7 +41,9 @@ class BellmanBasis:
             self.d_partition['all'] = self.theta_t
 
         # primitive theano vars
-        #self.theta_t = TT.dmatrix('theta')
+        self.w_t = TT.dmatrix('w')
+        self.d_partition['w'] = self.w_t # for derivatives wrt w
+
         self.S_t = theano.sparse.csr_matrix('S')
         self.Rfull_t = theano.sparse.csr_matrix('R')
         self.Mphi_t = TT.dmatrix('M_phi') # mixing matrix for PHI_lam
@@ -74,6 +76,15 @@ class BellmanBasis:
 
         self.set_loss(loss_type, wrt)
         self.set_regularizer(reg_tuple)
+
+    def unpack_params(self, vec):
+        n_theta_vars = self.k*self.n
+        self.set_theta(vec[:n_theta_vars])
+        self.w = vec[n_theta_vars:]
+
+    def pack_params(self, theta, w):        
+        return numpy.append(theta.flatten(), w.flatten())
+        
 
     def partition_theta(self, partition):
         ''' creates partition of the parameters according to the partition sizes
@@ -122,7 +133,7 @@ class BellmanBasis:
         else:
             self.loss_func, self.loss_grad = self.d_losses[loss_type]()
 
-    def bellman_funcs(self):
+    def closed_form_bellman_funcs(self):
 
         # lstd weights for bellman error using normal eqns
         b = TT.dot(self.PHI0_t.T, self.Rlam_t)
@@ -133,13 +144,16 @@ class BellmanBasis:
         #w_lstd = TT.dot(A, b)
         w_lstd = TT.dot(theano.sandbox.linalg.matrix_inverse(a), b)
         e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), w_lstd) # error vector
-        Lbe = TT.sqrt(TT.sum(TT.sqr(e_be))) # need sqrt?
-        Lbe_grad = theano.grad(Lbe, [self.grad_var])[0]
+        Lbe = TT.sqrt(TT.sum(TT.sqr(e_be)))
 
-        loss_be = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lbe, on_unused_input='ignore')
-        grad_be = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lbe_grad, on_unused_input='ignore')
+        return Lbe
 
-        return loss_be, grad_be
+    def two_layer_bellman_funcs(self):
+        e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), self.w_t) # error vector
+        Lbe = TT.sqrt(TT.sum(TT.sqr(e_be))) 
+        return Lbe
+        
+        
 
     def reward_funcs(self):
         
