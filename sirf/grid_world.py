@@ -307,15 +307,17 @@ class MDP:
 
 
     def sample_grid_world(self, n_samples, state_rep = 'tabular', 
-                                                distribution = 'policy'):
+                            distribution = 'policy', require_reward = False):
         ''' returns samples from the grid world mdp
         using state_rep for the features and sampling from the given 
         distribution type, either on-policy or uniform (one-step). samples are
         returned in the form [s,s',r,a]'''
         rewards = 0
-        while numpy.sum(rewards) == 0:
-            states, states_p, actions, actions_p, rewards = self._sample(n_samples, distribution)
-
+        states, states_p, actions, actions_p, rewards = self._sample(n_samples, distribution)
+        if require_reward: 
+            while numpy.sum(rewards) == 0:
+                states, states_p, actions, actions_p, rewards = self._sample(n_samples, distribution)
+            
         if state_rep == 'tabular':
             n_state_var = self.env.n_states
         elif state_rep == 'factored':

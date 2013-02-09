@@ -14,12 +14,17 @@ from rl import Model
 
 class BellmanBasis:
 
+    LOSSES = 'bellman model reward covariance nonzero l1code l1theta'.split()
+    PARTITIONS = 'theta-all theta-model theta-reward w'.split()
+
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None,
-            reg_tuple = None, partition = None, wrt = 'all', shift = 1e-6, nonlin = None):
+                 reg_tuple = None, partition = None, wrt = ['all-theta','w'], shift = 1e-6,
+                 nonlin = None, nonzero = None):
         
         self.n = n # dim of data
         self.k = k # num of features/columns
         self.loss_type = loss_type
+        self.nonzero = nonzero  # set this to some positive float to penalize zero theta vectors.
 
         if theta is None: 
             theta = 1e-6 * numpy.random.standard_normal((self.n, self.k))
@@ -38,7 +43,7 @@ class BellmanBasis:
             self.partition_theta(partition)
         else:
             self.theta_t = TT.dmatrix('theta')
-            self.d_partition['all'] = self.theta_t
+            self.d_partition['theta-all'] = self.theta_t
 
         # primitive theano vars
         self.w_t = TT.dmatrix('w')
@@ -63,28 +68,36 @@ class BellmanBasis:
         #self.cov_inv = theano.sandbox.linalg.matrix_inverse(TS.structured_add(
         #        self.cov, self.shift_t * TS.square_diagonal(TT.ones((k,))))) # l2 reg to avoid sing matrix
 
-        # dictionary mapping loss funcs/grads to names
-        self.d_losses = {
-            'bellman': self.bellman_funcs, 'model': self.model_funcs, 
-            'reward': self.reward_funcs, 'covariance':self.covariance_funcs}
-
-        # init functions for tracking bellman error components
-        self.grad_var = self.d_partition['all']
-        self.loss_be, self.grad_be = self.d_losses['bellman']()
-        self.loss_r, self.grad_r = self.d_losses['reward']()
-        self.loss_m, self.grad_m = self.d_losses['model']()
+        # precompile theano functions and gradients.
+        self.losses = {k: self.compile_loss(k) for k in self.LOSSES}
 
         self.set_loss(loss_type, wrt)
         self.set_regularizer(reg_tuple)
 
     def unpack_params(self, vec):
         n_theta_vars = self.k*self.n
-        self.set_theta(vec[:n_theta_vars])
-        self.w = vec[n_theta_vars:]
+        theta = self._reshape_theta(vec[:n_theta_vars])
+        w = vec[n_theta_vars:]
+        return theta, w
 
     def pack_params(self, theta, w):        
         return numpy.append(theta.flatten(), w.flatten())
         
+    @property
+    def loss_be(self):
+        return self.losses['bellman'][0]
+
+    @property
+    def theano_vars(self):
+        return [self.theta_t, self.w_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t]
+
+    def compile_loss(self, loss):
+        kw = dict(on_unused_input='ignore')
+        loss_t = getattr(self, '%s_funcs' % loss)()
+        loss = theano.function(self.theano_vars, loss_t, **kw)
+        return loss, [
+            theano.function(self.theano_vars, theano.grad(loss_t, var), **kw)
+            for var in self.d_partition.itervalues()]
 
     def partition_theta(self, partition):
         ''' creates partition of the parameters according to the partition sizes
@@ -103,35 +116,37 @@ class BellmanBasis:
         
         part_list = map( lambda name: self.d_partition[name], names)
         self.theta_t = TT.horizontal_stack(*part_list) 
-        self.d_partition['all'] = self.theta_t
+        self.d_partition['theta-all'] = self.theta_t
 
     def set_regularizer(self, reg_tuple):
+        self.reg_type = reg_tuple
         if reg_tuple is not None:
             self.reg_type, self.reg_param = reg_tuple
-            if self.reg_type == 'l1-code': # l1 loss on encoded features
-                Lreg = TT.sum(TT.abs_(self.PHI_full_t)) 
-            elif self.reg_type == 'l1-theta': # l1 loss on weights
-                Lreg = TT.sum(TT.abs_(self.theta_t)) 
-            else: 
-                print self.reg_type 
-                assert False
-            
-            Lreg_grad = theano.grad(Lreg, [self.grad_var])[0]
-            self.reg_func = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lreg, on_unused_input='ignore')
-            self.reg_grad = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lreg_grad, on_unused_input='ignore')
-        else: self.reg_type = None
 
     def set_loss(self, loss_type, wrt):
         self.loss_type = loss_type
         self.wrt = wrt
-        self.grad_var = self.d_partition[wrt]
-        self.part_num = self.d_partition.keys().index(wrt)
-        self.loss_be, self.grad_be = self.d_losses['bellman']() # rebuild bellman error?
-        if (loss_type =='bellman'):
-            self.loss_func = self.loss_be
-            self.loss_grad = self.grad_be
-        else:
-            self.loss_func, self.loss_grad = self.d_losses[loss_type]()
+        self.loss_func, self.loss_grads = self.losses[loss_type]
+        
+        self.d_part_nums = {}
+        self.d_loss_grads = {}
+        for w in wrt:
+            self.d_part_nums[w] = self.d_partitions.keys().index(w)
+            self.d_loss_grads[w] = self.loss_grads[self.part_num]
+        
+        self.loss_grad = self.loss_grads[self.part_num]
+
+    def l1code_funcs(self):
+        '''Minimize the size of the feature values.'''
+        return TT.sum(TT.abs_(self.PHI_full_t))
+
+    def l1theta_funcs(self):
+        '''Minimize the size of the feature weights.'''
+        return TT.sum(TT.abs_(self.theta_t))
+
+    def nonzero_funcs(self):
+        '''Try to make sure feature weights are nonzero.'''
+        return (1. / ((self.theta_t * self.theta_t).sum(axis=0) + 1e-10)).sum()
 
     def closed_form_bellman_funcs(self):
 
@@ -144,30 +159,20 @@ class BellmanBasis:
         #w_lstd = TT.dot(A, b)
         w_lstd = TT.dot(theano.sandbox.linalg.matrix_inverse(a), b)
         e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), w_lstd) # error vector
-        Lbe = TT.sqrt(TT.sum(TT.sqr(e_be)))
+        return TT.sqrt(TT.sum(TT.sqr(e_be)))
 
-        return Lbe
 
     def two_layer_bellman_funcs(self):
         e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), self.w_t) # error vector
-        Lbe = TT.sqrt(TT.sum(TT.sqr(e_be))) 
-        return Lbe
+        return TT.sqrt(TT.sum(TT.sqr(e_be))) 
         
-        
-
     def reward_funcs(self):
         
         # reward loss: ||(PHI0 (PHI0.T * PHI0))^-1 PHI0.T * Rlam - Rlam||
         d = TT.dot(self.PHI0_t.T, self.Rlam_t)
         w_r = TT.dot(self.cov_inv, d)
         e_r = self.Rlam_t - TT.dot(self.PHI0_t, w_r)
-        Lr = TT.sqrt(TT.sum(TT.sqr(e_r)))
-        Lr_grad = theano.grad(Lr, [self.grad_var])[0]
-
-        loss_r = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lr, on_unused_input='ignore')
-        grad_r = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lr_grad, on_unused_input='ignore')
-
-        return loss_r, grad_r
+        return TT.sqrt(TT.sum(TT.sqr(e_r)))
 
     def model_funcs(self):
         
@@ -175,44 +180,47 @@ class BellmanBasis:
         bb = TT.dot(self.PHI0_t.T, self.PHIlam_t)
         w_m = TT.dot(self.cov_inv, bb) # least squares weight matrix
         e_m = self.PHIlam_t - TT.dot(self.PHI0_t, w_m) # model error matrix
-        Lm = TT.sqrt(TT.sum(TT.sqr(e_m))) # frobenius norm
-        Lm_grad = theano.grad(Lm, [self.grad_var])[0]
-
-        loss_m = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lm, on_unused_input='ignore')
-        grad_m = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lm_grad, on_unused_input='ignore')
-
-        return loss_m, grad_m
+        return TT.sqrt(TT.sum(TT.sqr(e_m))) # frobenius norm
 
     def covariance_funcs(self):
         
         # todo weight by stationary distribution if unsampled?
         A = self.cov - self.beta_t * TT.dot(self.PHI0_t.T,self.PHIlam_t)
-        Lc = TT.sum(TT.abs_(A))
-        Lc_grad = theano.grad(Lc, [self.grad_var])[0]
-        
-        loss_c = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lc, on_unused_input='ignore')
-        grad_c = theano.function([self.theta_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t], Lc_grad, on_unused_input='ignore')
+        return TT.sum(TT.abs_(A))
 
-        return loss_c, grad_c
-
-    def loss(self, theta, S, R, Mphi, Mrew):
+    def loss(self, vec, S, R, Mphi, Mrew):
         
-        theta = self._reshape_theta(theta)
+        theta, w = self.unpack_params(vec)
         loss =  self.loss_func(theta, S, R, Mphi, Mrew)
         #print 'loss pre reg: ', loss
-        if self.reg_type is not None:
-            loss += (self.reg_param * self.reg_func(theta, S, R, Mphi, Mrew))
-            #print 'loss post reg: ', loss
+        if self.reg_type is 'l1-code':
+            l1_loss, _ = self.losses['l1code']
+            loss += self.reg_param * l1_loss(theta, S, R, Mphi, Mrew)
+        if self.reg_type is 'l1-theta':
+            l1_loss, _ = self.losses['l1theta']
+            loss += self.reg_param * l1_loss(theta, S, R, Mphi, Mrew)
+        if self.nonzero:
+            nz_loss, _ = self.losses['nonzero']
+            loss += self.nonzero * nz_loss(theta, S, R, Mphi, Mrew)
         return loss / (S.shape[0] * self.n) # norm loss by num samples and dim of data
         
-    def grad(self, theta, S, R, Mphi, Mrew):
+    def grad(self, vec, S, R, Mphi, Mrew):
         
-        theta = self._reshape_theta(theta)
+        theta, w = self.unpack_params(vec)
+        
         grad = self.loss_grad(theta, S, R, Mphi, Mrew)
-        if self.reg_type is not None:
-            grad += (self.reg_param * self.reg_grad(theta, S, R, Mphi, Mrew))
+        if self.reg_type is 'l1-code':
+            _, l1_grads = self.losses['l1code']
+            grad += self.reg_param * l1_grads[self.part_num](theta, w, S, R, Mphi, Mrew)
+        if self.reg_type is 'l1-theta':
+            _, l1_grads = self.losses['l1theta']
+            grad += self.reg_param * l1_grads[self.part_num](theta, w, S, R, Mphi, Mrew)
+        if self.nonzero:
+            _, nz_grads = self.losses['nonzero']
+            grad += self.reg_param * nz_grads[self.part_num](theta, w, S, R, Mphi, Mrew)
         grad = grad / (S.shape[0] * self.n) # norm grad by num samples and dim of data
-        if self.wrt is 'all':
+
+        if self.wrt is 'theta-all':
             return grad.flatten()
         else: # pad with zeros for partition
             full_grad = numpy.zeros_like(theta)
