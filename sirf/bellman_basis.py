@@ -8,6 +8,7 @@ import theano.sparse
 import theano.sparse as TS
 import theano.sandbox.linalg
 import matplotlib.pyplot as plt
+import condor
 import grid_world
 from scipy.optimize import fmin_cg
 from rl import Model
