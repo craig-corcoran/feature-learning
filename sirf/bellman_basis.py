@@ -15,10 +15,10 @@ from rl import Model
 class BellmanBasis:
 
     LOSSES = 'bellman model reward covariance nonzero l1code l1theta'.split()
-    PARTITIONS = 'theta-all theta-model theta-reward w'.split()
+    #PARTITIONS = 'theta-all theta-model theta-reward w'.split()
 
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None,
-                 reg_tuple = None, partition = None, wrt = ['all-theta','w'], shift = 1e-6,
+                 reg_tuple = None, partition = None, wrt = ['all-theta','w'],
                  nonlin = None, nonzero = None):
         
         self.n = n # dim of data
@@ -54,14 +54,13 @@ class BellmanBasis:
         self.Mphi_t = TT.dmatrix('M_phi') # mixing matrix for PHI_lam
         self.Mrew_t = TT.dmatrix('M_rew') # mixing matrix for reward_lambda
         self.beta_t = theano.shared(beta) # multiplier on gamma set by env
-        self.shift_t = theano.shared(shift)
 
         # encode s and mix lambda components
         d_nonlin = dict(sigmoid=TT.nnet.sigmoid, relu=lambda z: TT.maximum(0, z))
         self.PHI_full_t = d_nonlin.get(nonlin, lambda z: z)(TS.structured_dot(self.S_t, self.theta_t))
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
         self.PHI0_t = self.PHI_full_t[0:self.PHIlam_t.shape[0],:]
-        self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T #xxx
+        self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T 
 
         self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) 
         self.cov_inv = theano.sandbox.linalg.matrix_inverse(self.cov)
@@ -107,12 +106,13 @@ class BellmanBasis:
         print 'partitioning theta'
         names, indices = partition.keys(), partition.values()
         assert sum(indices) == self.k
-        self.part_inds = numpy.insert(numpy.cumsum(indices), 0, 0)
-        
-        n_parts = len(names)
-        for i in xrange(n_parts):
-            self.d_partition[names[i]] = theano.shared(
-                        self.theta[:, self.part_inds[i]: self.part_inds[i+1]]) 
+        part_inds = numpy.insert(numpy.cumsum(indices), 0, 0)
+        self.d_part_inds = {}
+        for n,i in enumerate(names):
+            self.d_part_inds[n] = (part_inds[i], part_inds[i+1])
+
+            self.d_partition[n] = theano.shared(
+                        self.theta[:, part_inds[i]: part_inds[i+1]]) 
         
         part_list = map( lambda name: self.d_partition[name], names)
         self.theta_t = TT.horizontal_stack(*part_list) 
@@ -128,13 +128,6 @@ class BellmanBasis:
         self.wrt = wrt
         self.loss_func, self.loss_grads = self.losses[loss_type]
         
-        self.d_part_nums = {}
-        self.d_loss_grads = {}
-        for w in wrt:
-            self.d_part_nums[w] = self.d_partitions.keys().index(w)
-            self.d_loss_grads[w] = self.loss_grads[self.part_num]
-        
-        self.loss_grad = self.loss_grads[self.part_num]
 
     def l1code_funcs(self):
         '''Minimize the size of the feature values.'''
@@ -149,7 +142,7 @@ class BellmanBasis:
         return (1. / ((self.theta_t * self.theta_t).sum(axis=0) + 1e-10)).sum()
 
     def closed_form_bellman_funcs(self):
-
+        ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
         b = TT.dot(self.PHI0_t.T, self.Rlam_t)
         a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) 
@@ -163,6 +156,7 @@ class BellmanBasis:
 
 
     def two_layer_bellman_funcs(self):
+        ''' uses self.w_t when measuring loss'''
         e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), self.w_t) # error vector
         return TT.sqrt(TT.sum(TT.sqr(e_be))) 
         
@@ -191,41 +185,51 @@ class BellmanBasis:
     def loss(self, vec, S, R, Mphi, Mrew):
         
         theta, w = self.unpack_params(vec)
-        loss =  self.loss_func(theta, S, R, Mphi, Mrew)
+        loss =  self.loss_func(theta, w, S, R, Mphi, Mrew)
         #print 'loss pre reg: ', loss
         if self.reg_type is 'l1-code':
             l1_loss, _ = self.losses['l1code']
-            loss += self.reg_param * l1_loss(theta, S, R, Mphi, Mrew)
+            loss += self.reg_param * l1_loss(theta, w, S, R, Mphi, Mrew)
         if self.reg_type is 'l1-theta':
             l1_loss, _ = self.losses['l1theta']
-            loss += self.reg_param * l1_loss(theta, S, R, Mphi, Mrew)
+            loss += self.reg_param * l1_loss(theta, w, S, R, Mphi, Mrew)
         if self.nonzero:
             nz_loss, _ = self.losses['nonzero']
-            loss += self.nonzero * nz_loss(theta, S, R, Mphi, Mrew)
+            loss += self.nonzero * nz_loss(theta, w, S, R, Mphi, Mrew)
         return loss / (S.shape[0] * self.n) # norm loss by num samples and dim of data
         
     def grad(self, vec, S, R, Mphi, Mrew):
         
         theta, w = self.unpack_params(vec)
         
-        grad = self.loss_grad(theta, S, R, Mphi, Mrew)
-        if self.reg_type is 'l1-code':
-            _, l1_grads = self.losses['l1code']
-            grad += self.reg_param * l1_grads[self.part_num](theta, w, S, R, Mphi, Mrew)
-        if self.reg_type is 'l1-theta':
-            _, l1_grads = self.losses['l1theta']
-            grad += self.reg_param * l1_grads[self.part_num](theta, w, S, R, Mphi, Mrew)
-        if self.nonzero:
-            _, nz_grads = self.losses['nonzero']
-            grad += self.reg_param * nz_grads[self.part_num](theta, w, S, R, Mphi, Mrew)
-        grad = grad / (S.shape[0] * self.n) # norm grad by num samples and dim of data
+        # build theta component of the gradient
+        th_grad = numpy.zeros_like(self.theta)
+        for v, i in enumerate(self.d_partitions.keys()):
+            if v in self.wrt:
+                grad = self.loss_grads[i](theta, w, S, R, Mphi, Mrew)
+                if self.reg_type is 'l1-code':
+                    _, l1_grads = self.losses['l1code']
+                    grad += self.reg_param * l1_grads[i](theta, w, S, R, Mphi, Mrew)
+                if self.reg_type is 'l1-theta':
+                    _, l1_grads = self.losses['l1theta']
+                    grad += self.reg_param * l1_grads[i](theta, w, S, R, Mphi, Mrew)
+                if self.nonzero:
+                    _, nz_grads = self.losses['nonzero']
+                    grad += self.reg_param * nz_grads[self.part_num](theta, w, S, R, Mphi, Mrew)
 
-        if self.wrt is 'theta-all':
-            return grad.flatten()
-        else: # pad with zeros for partition
-            full_grad = numpy.zeros_like(theta)
-            full_grad[:, self.part_inds[self.part_num]:self.part_inds[self.part_num+1]] = grad
-            return full_grad.flatten()
+                if v == 'theta-all':
+                    th_grad = grad
+                    # cant take grad wrt to theta-all and theta-part at the same time
+                    wrt_temp = copy.copy(self.wrt)
+                    assert not any(['theta' in s for s in wrt_temp.remove(v)])
+                elif v == 'w':
+                    w_grad = grad
+                else:
+                    j,k = self.d_part_inds[v]
+                    th_grad[:,j:k] = grad
+
+        grad = grad / (S.shape[0] * self.n) # norm grad by num samples and dim of data
+        return numpy.append(th_grad.flatten(), w_grad.flatten())
 
     def _calc_n_steps(self, lam, gam, eps):
 
@@ -267,7 +271,7 @@ class BellmanBasis:
         return m_phi, m_rew
 
     def encode(self, S):
-        return numpy.dot(S, self.theta)
+        return numpy.dot(S, self.theta) # TODO add nonlin here
 
     def lstd_weights(self, S, R, lam, gam, eps, sampled = True):
 
@@ -346,11 +350,7 @@ def _stack_feature_row(phi_slice, r, c):
             F = numpy.hstack((F,I))
     return F
     
-            
-
-if __name__ == '__main__':
-    test_theano_basis()
-
+    
 # vary: 
 #   -regularization type/param
 #   -partitions, basis size
