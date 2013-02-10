@@ -15,11 +15,11 @@ from rl import Model
 
 class BellmanBasis:
 
-    LOSSES = 'bellman model reward covariance nonzero l1code l1theta'.split()
+    LOSSES = 'bellman layered model reward covariance nonzero l1code l1theta'.split()
     #PARTITIONS = 'theta-all theta-model theta-reward w'.split()
 
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None,
-                 reg_tuple = None, partition = None, wrt = ['all-theta','w'],
+                 reg_tuple = None, partition = None, wrt = ['all-','w'],
                  nonlin = None, nonzero = None):
         
         self.n = n # dim of data
@@ -88,6 +88,14 @@ class BellmanBasis:
         return self.losses['bellman'][0]
 
     @property
+    def loss_r(self):
+        return self.losses['reward'][0]
+
+    @property
+    def loss_m(self):
+        return self.losses['model'][0]
+
+    @property
     def theano_vars(self):
         return [self.theta_t, self.w_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t]
 
@@ -95,21 +103,31 @@ class BellmanBasis:
         kw = dict(on_unused_input='ignore')
         loss_t = getattr(self, '%s_funcs' % loss)()
         loss = theano.function(self.theano_vars, loss_t, **kw)
-        return loss, [
-            theano.function(self.theano_vars, theano.grad(loss_t, var), **kw)
-            for var in self.d_partition.itervalues()]
+
+        grad_list = []
+        for var in self.d_partition.itervalues():
+            try: # theano doesn't like it when you take the gradient of wrt an irrelevant var
+                grad_list.append(theano.function(self.theano_vars, theano.grad(loss_t, var), **kw))
+            except ValueError: # function not differentiable wrt 
+                grad_list.append(theano.function(self.theano_vars, TT.zeros_like(var), **kw))    
+
+        return loss, grad_list
+            #theano.function(self.theano_vars, theano.grad(loss_t, var), **kw)
+            #for var in self.d_partition.itervalues()]
 
     def partition_theta(self, partition):
         ''' creates partition of the parameters according to the partition sizes
         given in the partition tuple. ex: partition = {'reward':1, 'model':k-1} 
         '''
         
-        print 'partitioning theta'
-        names, indices = partition.keys(), partition.values()
+        print 'partitioning theta: ', partition.keys()
+        names = partition.keys()
+        indices = partition.values()
+
         assert sum(indices) == self.k
         part_inds = numpy.insert(numpy.cumsum(indices), 0, 0)
         self.d_part_inds = {}
-        for n,i in enumerate(names):
+        for i,n in enumerate(names):
             self.d_part_inds[n] = (part_inds[i], part_inds[i+1])
 
             self.d_partition[n] = theano.shared(
@@ -142,7 +160,7 @@ class BellmanBasis:
         '''Try to make sure feature weights are nonzero.'''
         return (1. / ((self.theta_t * self.theta_t).sum(axis=0) + 1e-10)).sum()
 
-    def closed_form_bellman_funcs(self):
+    def bellman_funcs(self):
         ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
         b = TT.dot(self.PHI0_t.T, self.Rlam_t)
@@ -156,7 +174,7 @@ class BellmanBasis:
         return TT.sqrt(TT.sum(TT.sqr(e_be)))
 
 
-    def two_layer_bellman_funcs(self):
+    def layered_funcs(self):
         ''' uses self.w_t when measuring loss'''
         e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), self.w_t) # error vector
         return TT.sqrt(TT.sum(TT.sqr(e_be))) 
@@ -205,7 +223,7 @@ class BellmanBasis:
         
         # build theta component of the gradient
         th_grad = numpy.zeros_like(self.theta)
-        for v, i in enumerate(self.d_partitions.keys()):
+        for i,v in enumerate(self.d_partitions.keys()):
             if v in self.wrt:
                 grad = self.loss_grads[i](theta, w, S, R, Mphi, Mrew)
                 if self.reg_type is 'l1-code':
