@@ -217,7 +217,7 @@ class MDP:
         if environment is None:
             goals = numpy.zeros((size,size))
             goals[1,1] = 1
-            print 'goal position: ', goals.nonzero()
+            #print 'goal position: ', goals.nonzero()
 
             walls = numpy.zeros((size,size))
             if walls_on:
@@ -238,7 +238,7 @@ class MDP:
         
         if distribution is 'uniform':
         
-            print 'sampling with a uniform distribution'
+            #print 'sampling with a uniform distribution'
     
             
             states   = numpy.zeros((n_samples,2), dtype = numpy.int)
@@ -273,7 +273,7 @@ class MDP:
 
         elif distribution is 'policy':
 
-            print 'sampling with a policy distribution'
+            #print 'sampling with a policy distribution'
 
             states = numpy.zeros((n_samples+1,2), dtype = numpy.float)
             states[0] = self.env.state

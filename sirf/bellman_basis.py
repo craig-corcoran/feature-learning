@@ -18,8 +18,8 @@ class BellmanBasis:
     LOSSES = 'bellman layered model reward covariance nonzero l1code l1theta'.split()
     #PARTITIONS = 'theta-all theta-model theta-reward w'.split()
 
-    def __init__(self, n, k, beta, loss_type = 'bellman', theta = None,
-                 reg_tuple = None, partition = None, wrt = ['all-','w'],
+    def __init__(self, n, k, beta, loss_type = 'bellman', theta = None, w = None,
+                 reg_tuple = None, partition = None, wrt = ['theta-all','w'],
                  nonlin = None, nonzero = None):
         
         self.n = n # dim of data
@@ -35,9 +35,12 @@ class BellmanBasis:
             #for i in xrange(self.k):
                 #z = numpy.random.random(self.n)
                 #theta[:,i][z < sparsity] = 0.
+        if w is None:
+            w = numpy.random.standard_normal((self.k,1))
+            w = w / numpy.linalg.norm(w)
         else: assert (theta.shape == (k*n,)) or (theta.shape == (self.n, self.k))
-        self.theta = self._reshape_theta(theta)
-    
+        self.set_params(theta = theta, w = w)
+
         # partition the features for gradients
         self.d_partition = {}
         if partition is not None:       
@@ -69,19 +72,11 @@ class BellmanBasis:
         #        self.cov, self.shift_t * TS.square_diagonal(TT.ones((k,))))) # l2 reg to avoid sing matrix
 
         # precompile theano functions and gradients.
-        self.losses = {k: self.compile_loss(k) for k in self.LOSSES}
+        #self.losses = {lo: self.compile_loss(lo) for lo in self.LOSSES} # older pythons do not like
+        self.losses = dict(zip(self.LOSSES, [self.compile_loss(lo) for lo in self.LOSSES]))
 
         self.set_loss(loss_type, wrt)
         self.set_regularizer(reg_tuple)
-
-    def unpack_params(self, vec):
-        n_theta_vars = self.k*self.n
-        theta = self._reshape_theta(vec[:n_theta_vars])
-        w = vec[n_theta_vars:]
-        return theta, w
-
-    def pack_params(self, theta, w):        
-        return numpy.append(theta.flatten(), w.flatten())
         
     @property
     def loss_be(self):
@@ -108,7 +103,7 @@ class BellmanBasis:
         for var in self.d_partition.itervalues():
             try: # theano doesn't like it when you take the gradient of wrt an irrelevant var
                 grad_list.append(theano.function(self.theano_vars, theano.grad(loss_t, var), **kw))
-            except ValueError: # function not differentiable wrt 
+            except ValueError: # function not differentiable wrt var, just return zeros 
                 grad_list.append(theano.function(self.theano_vars, TT.zeros_like(var), **kw))    
 
         return loss, grad_list
@@ -203,7 +198,7 @@ class BellmanBasis:
 
     def loss(self, vec, S, R, Mphi, Mrew):
         
-        theta, w = self.unpack_params(vec)
+        theta, w = self._unpack_params(vec)
         loss =  self.loss_func(theta, w, S, R, Mphi, Mrew)
         #print 'loss pre reg: ', loss
         if self.reg_type is 'l1-code':
@@ -219,11 +214,11 @@ class BellmanBasis:
         
     def grad(self, vec, S, R, Mphi, Mrew):
         
-        theta, w = self.unpack_params(vec)
+        theta, w = self._unpack_params(vec)
         
-        # build theta component of the gradient
         th_grad = numpy.zeros_like(self.theta)
-        for i,v in enumerate(self.d_partitions.keys()):
+        w_grad = numpy.zeros_like(self.w)
+        for i,v in enumerate(self.d_partition.keys()):
             if v in self.wrt:
                 grad = self.loss_grads[i](theta, w, S, R, Mphi, Mrew)
                 if self.reg_type is 'l1-code':
@@ -240,7 +235,8 @@ class BellmanBasis:
                     th_grad = grad
                     # cant take grad wrt to theta-all and theta-part at the same time
                     wrt_temp = copy.copy(self.wrt)
-                    assert not any(['theta' in s for s in wrt_temp.remove(v)])
+                    wrt_temp.remove(v)
+                    assert not any(['theta' in s for s in wrt_temp])
                 elif v == 'w':
                     w_grad = grad
                 else:
@@ -317,13 +313,28 @@ class BellmanBasis:
             return numpy.linalg.solve(a,b) 
         return b/a
 
-    def set_theta(self, theta):
-        self.theta = self._reshape_theta(theta)
+    def set_params(self, vec = None, theta = None, w = None):
+        if vec is not None:
+            theta, w = self._unpack_params(vec)
+        if theta is not None:
+            self.theta = self._reshape_theta(theta)
+        if w is not None:
+            self.w = numpy.reshape(w, (self.k, 1))
 
     def _reshape_theta(self, theta = None):
         if theta is None:
             theta = self.theta
         return numpy.reshape(theta, (self.n, self.k))
+
+    def _unpack_params(self, vec):
+        n_theta_vars = self.k*self.n
+        theta = self._reshape_theta(vec[:n_theta_vars])
+        w = numpy.reshape(vec[n_theta_vars:], (self.k, 1))
+        return theta, w
+    
+    @property
+    def flat_params(self):        
+        return numpy.append(self.theta.flatten(), self.w.flatten())
 
 
 def plot_features(phi, r = None, c = None):
