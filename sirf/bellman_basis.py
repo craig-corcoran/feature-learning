@@ -55,9 +55,9 @@ class BellmanBasis:
 
         self.S_t = theano.sparse.csr_matrix('S')
         self.Rfull_t = theano.sparse.csr_matrix('R')
-        self.Mphi_t = TT.dmatrix('M_phi') # mixing matrix for PHI_lam
-        self.Mrew_t = TT.dmatrix('M_rew') # mixing matrix for reward_lambda
-        self.beta_t = theano.shared(beta) # multiplier on gamma set by env
+        self.Mphi_t = TT.dmatrix('Mphi') # mixing matrix for PHI_lam
+        self.Mrew_t = TT.dmatrix('Mrew') # mixing matrix for reward_lambda
+        self.beta_t = theano.shared(beta) # multiplier on gamma set by env xxx
 
         # encode s and mix lambda components
         d_nonlin = dict(sigmoid=TT.nnet.sigmoid, relu=lambda z: TT.maximum(0, z))
@@ -201,10 +201,10 @@ class BellmanBasis:
         theta, w = self._unpack_params(vec)
         loss =  self.loss_func(theta, w, S, R, Mphi, Mrew)
         #print 'loss pre reg: ', loss
-        if self.reg_type is 'l1-code':
+        if self.reg_type is 'l1code':
             l1_loss, _ = self.losses['l1code']
             loss += self.reg_param * l1_loss(theta, w, S, R, Mphi, Mrew)
-        if self.reg_type is 'l1-theta':
+        if self.reg_type is 'l1theta':
             l1_loss, _ = self.losses['l1theta']
             loss += self.reg_param * l1_loss(theta, w, S, R, Mphi, Mrew)
         if self.nonzero:
@@ -221,10 +221,10 @@ class BellmanBasis:
         for i,v in enumerate(self.d_partition.keys()):
             if v in self.wrt:
                 grad = self.loss_grads[i](theta, w, S, R, Mphi, Mrew)
-                if self.reg_type is 'l1-code':
+                if self.reg_type is 'l1code':
                     _, l1_grads = self.losses['l1code']
                     grad += self.reg_param * l1_grads[i](theta, w, S, R, Mphi, Mrew)
-                if self.reg_type is 'l1-theta':
+                if self.reg_type is 'l1theta':
                     _, l1_grads = self.losses['l1theta']
                     grad += self.reg_param * l1_grads[i](theta, w, S, R, Mphi, Mrew)
                 if self.nonzero:
@@ -245,7 +245,8 @@ class BellmanBasis:
 
         grad = grad / (S.shape[0] * self.n) # norm grad by num samples and dim of data
         return numpy.append(th_grad.flatten(), w_grad.flatten())
-
+    
+    @classmethod
     def _calc_n_steps(self, lam, gam, eps):
 
         # calculate number of steps to perform lambda-averaging over
@@ -256,6 +257,7 @@ class BellmanBasis:
 
         return n_time_steps
 
+    @classmethod
     def get_mixing_matrices(self, m, lam, gam, sampled = True, eps = 1e-5, dim = None):
         ''' returns a matrix for combining feature vectors from different time
         steps for use in TD(lambda) algorithms. m is the number of final
@@ -264,7 +266,7 @@ class BellmanBasis:
         only all m+n_step updates; slightly different than recursive TD
         algorithm, which uses all updates from all samples '''
 
-        n_steps = self._calc_n_steps(lam, gam, eps = eps)
+        n_steps = BellmanBasis._calc_n_steps(lam, gam, eps = eps)
         vec = map(lambda i: (lam*gam)**i, xrange(n_steps)) # decaying weight vector
         if sampled:
             assert dim is not None

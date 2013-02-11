@@ -40,18 +40,18 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
     #n_extra = bb._calc_n_steps(lam, gam, eps)
     #print 'n extra sampled needed: ', n_extra
     bb = BellmanBasis(dim, k, beta_ratio, partition = partition)
-    d_loss_funcs = {'test-bellman': bb.loss_be , 'test-reward': bb.loss_r,
+    BellmanBasis.d_loss_funcs = {'test-bellman': bb.loss_be , 'test-reward': bb.loss_r,
                     'test-model': bb.loss_m, 'true-bellman': m.bellman_error,
                     'true-lsq': m.value_error}
     d_loss_data = {}
-    for key in d_loss_funcs.iterkeys():
+    for key in bb.d_loss_funcs.iterkeys():
         d_loss_data[key] = numpy.zeros((len(n_samples), n_runs, len(training_methods)))
 
     def yield_jobs():
 
         for i,n in enumerate(n_samples):
             
-            Mphi, Mrew = bb.get_mixing_matrices(n, lam, gam, sampled = True, eps = eps, dim = dim)
+            Mphi, Mrew = BellmanBasis.get_mixing_matrices(n, lam, gam, sampled = True, eps = eps, dim = dim)
 
             for r in xrange(n_runs):
                 
@@ -69,10 +69,12 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
                 S_test, Sp_test, R_test, _, = mdp.sample_grid_world(n, distribution = weighting)
                 S_test = scipy.sparse.vstack((S_test, Sp_test[-1,:]))
 
+                bb = BellmanBasis(dim, k, beta_ratio, partition = partition, 
+                                                theta = theta_init, w = w_init)
+
                 for j,tm in enumerate(training_methods):
                     
-                    yield (condor_job,[(i,r,j), d_loss_funcs, tm, theta_init, w_init, 
-                            dim, k, beta_ratio, partition, S, R, S_test, R_test,
+                    yield (condor_job,[(i,r,j), bb, tm, S, R, S_test, R_test,
                             Mphi, Mrew, patience, max_iter, weighting])
 
     # aggregate the condor data
@@ -107,12 +109,9 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
     plt.savefig('./sirf/output/n_samples.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' % (k, str(lam), 
                         str(gam), weighting, env_size, n_runs))  
 
-def condor_job(ind_tuple, d_loss_funcs, method, theta_init, w_init, dim, k, 
-    beta_ratio, partition, S, R, S_test, R_test, Mphi, Mrew, patience, max_iter, 
-    weighting):
+def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi, 
+            Mrew, patience, max_iter, weighting):
     
-    bb = BellmanBasis(dim, k, beta_ratio, partition = partition, 
-                                                theta = theta_init, w = w_init)
     #print 'training with %i samples and %s loss' % (S.shape[0], method)
 
     if (method == 'covariance') or (method == 'bellman'):
@@ -125,13 +124,13 @@ def condor_job(ind_tuple, d_loss_funcs, method, theta_init, w_init, dim, k,
                                     patience, max_iter, weighting)
         bb.set_loss('bellman', ['theta-model'])
         bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
-                                    patience, max_iter, weighting)
+                                    patience, max_iter, weighting) # b= redundant?
     else:
         print 'unrecognized training method string: ', method
         assert False
     
     d_batch_loss = {}
-    for key,fun in d_loss_funcs.items():
+    for key,fun in bb.d_loss_funcs.items():
         if 'test' in key:
             d_batch_loss[key] = fun(bb.theta, bb.w, S_test, R_test, Mphi, Mrew) 
         elif 'true' in key:
@@ -142,7 +141,6 @@ def condor_job(ind_tuple, d_loss_funcs, method, theta_init, w_init, dim, k,
 
 def train_basis(basis, S, R, S_test, R_test, Mphi, Mrew, patience, 
                     max_iter, weighting):
-    
     try:
         n_test_inc = 0
         best_test_loss = numpy.inf
