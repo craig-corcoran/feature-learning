@@ -48,7 +48,8 @@ class Model:
         if a.ndim > 0:
             return numpy.linalg.solve(a,b) 
         return numpy.array(b/a)
-
+    
+    @classmethod
     def bellman_error(self, PHI, w = None, weighting = 'uniform'):
         
         if w is None:
@@ -59,6 +60,7 @@ class Model:
         D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
         return numpy.linalg.norm(numpy.dot(D, (self.R - numpy.dot(A, w))))
 
+    @classmethod
     def value_error(self, PHI, w = None, weighting = 'uniform'):
 
         if PHI.ndim == 1:

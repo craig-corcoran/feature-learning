@@ -13,14 +13,21 @@ import grid_world
 from scipy.optimize import fmin_cg
 from rl import Model
 
+
+
 class BellmanBasis:
 
     LOSSES = 'bellman layered model reward covariance nonzero l1code l1theta'.split()
+    RECORDABLE = 'test-bellman test-reward test-model'.split()# true-bellman true-lsq'.split()
     #PARTITIONS = 'theta-all theta-model theta-reward w'.split()
 
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None, w = None,
                  reg_tuple = None, partition = None, wrt = ['theta-all','w'],
-                 nonlin = None, nonzero = None):
+                 nonlin = None, nonzero = None, record_loss = None):
+
+        theano.gof.compilelock.set_lock_status(False)
+        theano.config.warn.sum_div_dimshuffle_bug = False
+        theano.config.on_unused_input = 'ignore'
         
         self.n = n # dim of data
         self.k = k # num of features/columns
@@ -77,6 +84,7 @@ class BellmanBasis:
 
         self.set_loss(loss_type, wrt)
         self.set_regularizer(reg_tuple)
+        self.set_recorded_loss(record_loss)
         
     @property
     def loss_be(self):
@@ -93,6 +101,25 @@ class BellmanBasis:
     @property
     def theano_vars(self):
         return [self.theta_t, self.w_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t]
+    
+    #@property
+    #def m_bellman_error(self):
+        #return self.model.bellman_error
+    
+    #@property
+    #def m_value_error(self):
+        #return self.model.bellman_error
+
+    @property
+    def record_funs(self):
+        return [self.loss_be , self.loss_r, self.loss_m] #, self.m_bellman_error, self.m_value_error]
+
+    def set_recorded_loss(self, losses):   
+        self.d_recordable = dict(zip(self.RECORDABLE, self.record_funs))
+        self.d_loss_funcs = {}
+        for lo in losses:
+            self.d_loss_funcs[lo] = self.d_recordable[lo]
+                
 
     def compile_loss(self, loss):
         kw = dict(on_unused_input='ignore')

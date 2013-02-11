@@ -20,10 +20,12 @@ import theano
 # include reward learning
 # nonlinear feature setup
 def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam = 0., eps = 1e-5,  
-    partition = None, patience = 15, max_iter = 15, weighting = 'uniform',
+    partition = None, patience = 1, max_iter = 10, weighting = 'uniform',
     n_samples = None, beta_ratio = 1.,
     training_methods = ['covariance', 'bellman', 'covariance-bellman']):
     
+    theano.gof.compilelock.set_lock_status(False)
+    theano.config.on_unused_input = 'ignore'
     theano.config.warn.sum_div_dimshuffle_bug = False
 
     if n_samples is None:
@@ -36,15 +38,14 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
     mdp = grid_world.MDP(walls_on = True, size = env_size)    
     m = Model(mdp.env.R, mdp.env.P, gam = gam)
     dim = env_size**2
+
+    # tracked losses
+    losses = ['test-bellman', 'test-reward', 'test-model'] #, 'true-bellman', 'true-lsq']
     
     #n_extra = bb._calc_n_steps(lam, gam, eps)
     #print 'n extra sampled needed: ', n_extra
-    bb = BellmanBasis(dim, k, beta_ratio, partition = partition)
-    BellmanBasis.d_loss_funcs = {'test-bellman': bb.loss_be , 'test-reward': bb.loss_r,
-                    'test-model': bb.loss_m, 'true-bellman': m.bellman_error,
-                    'true-lsq': m.value_error}
     d_loss_data = {}
-    for key in bb.d_loss_funcs.iterkeys():
+    for key in losses:
         d_loss_data[key] = numpy.zeros((len(n_samples), n_runs, len(training_methods)))
 
     def yield_jobs():
@@ -70,8 +71,8 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
                 S_test = scipy.sparse.vstack((S_test, Sp_test[-1,:]))
 
                 bb = BellmanBasis(dim, k, beta_ratio, partition = partition, 
-                                                theta = theta_init, w = w_init)
-
+                    theta = theta_init, w = w_init, record_loss = losses)
+                
                 for j,tm in enumerate(training_methods):
                     
                     yield (condor_job,[(i,r,j), bb, tm, S, R, S_test, R_test,
@@ -84,7 +85,8 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
                 d_loss_data[name][ind_tuple] = d_batch_loss[name]
 
     # save results!
-    out_path = './sirf/output/n_sample_results.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' % (k, str(lam), str(gam), weighting, env_size, n_runs)
+    out_path = './sirf/output/n_sample_results.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' \
+                        % (k, str(lam), str(gam), weighting, env_size, n_runs)
     with util.openz(out_path, "wb") as out_file:
         pickle.dump(d_loss_data, out_file, protocol = -1)
     
@@ -106,8 +108,8 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
             plt.axis('off')
             #plt.legend(loc = 3) # lower left
 
-    plt.savefig('./sirf/output/n_samples.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' % (k, str(lam), 
-                        str(gam), weighting, env_size, n_runs))  
+    plt.savefig('./sirf/output/n_samples.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
+            % (k, str(lam), str(gam), weighting, env_size, n_runs))  
 
 def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi, 
             Mrew, patience, max_iter, weighting):
