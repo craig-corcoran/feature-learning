@@ -14,15 +14,19 @@ from sirf.rl import Model
 from sirf.bellman_basis import BellmanBasis
 import theano
 
+theano.gof.compilelock.set_lock_status(False)
+theano.config.warn.sum_div_dimshuffle_bug = False
+theano.config.on_unused_input = 'ignore'
+        
 
 # logging
 # weighting and loss measures - policy loss
 # include reward learning
 # nonlinear feature setup
 def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam = 0., eps = 1e-5,  
-    partition = None, patience = 1, max_iter = 10, weighting = 'uniform',
+    partition = None, patience = 1, max_iter = 3, weighting = 'uniform',
     n_samples = None, beta_ratio = 1.,
-    training_methods = ['covariance', 'bellman', 'covariance-bellman']):
+    training_methods = ['covariance', 'layered', 'covariance-layered']): 
     
     theano.gof.compilelock.set_lock_status(False)
     theano.config.on_unused_input = 'ignore'
@@ -85,7 +89,7 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
                 d_loss_data[name][ind_tuple] = d_batch_loss[name]
 
     # save results!
-    out_path = './sirf/output/n_sample_results.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' \
+    out_path = './sirf/output/pickle/n_sample_results.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' \
                         % (k, str(lam), str(gam), weighting, env_size, n_runs)
     with util.openz(out_path, "wb") as out_file:
         pickle.dump(d_loss_data, out_file, protocol = -1)
@@ -108,7 +112,7 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
             plt.axis('off')
             #plt.legend(loc = 3) # lower left
 
-    plt.savefig('./sirf/output/n_samples.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
+    plt.savefig('./sirf/output/plots/n_samples.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
             % (k, str(lam), str(gam), weighting, env_size, n_runs))  
 
 def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi, 
@@ -116,15 +120,19 @@ def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi,
     
     #print 'training with %i samples and %s loss' % (S.shape[0], method)
 
-    if (method == 'covariance') or (method == 'bellman'):
+    if (method == 'covariance'): 
         bb.set_loss(method, ['theta-all'])
         bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
                                     patience, max_iter, weighting)
-    elif method == 'covariance-bellman':
+    elif (method == 'layered'):
+        bb.set_loss(method, ['theta-all', 'w'])
+        bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
+                                    patience, max_iter, weighting)
+    elif method == 'covariance-layered':
         bb.set_loss('covariance', ['theta-model'])
         bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
                                     patience, max_iter, weighting)
-        bb.set_loss('bellman', ['theta-model'])
+        bb.set_loss('layered', ['theta-model', 'w'])
         bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
                                     patience, max_iter, weighting) # b= redundant?
     else:
@@ -142,12 +150,12 @@ def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi,
   
 
 def train_basis(basis, S, R, S_test, R_test, Mphi, Mrew, patience, 
-                    max_iter, weighting):
+                    max_iter, weighting, min_imp = 1e-8):
     try:
         n_test_inc = 0
         best_test_loss = numpy.inf
         while (n_test_inc < patience):
-
+            
             basis.set_params( fmin_cg(basis.loss, basis.flat_params, basis.grad,
                                 args = (S, R, Mphi, Mrew), 
                                 full_output = False,
@@ -156,14 +164,15 @@ def train_basis(basis, S, R, S_test, R_test, Mphi, Mrew, patience,
             
             err = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew) 
             
-            if err < best_test_loss:
-                best_test_loss = err
-                best_theta = copy.deepcopy(basis.theta)
+            if err < (best_test_loss - min_imp):
                 n_test_inc = 0
                 print 'new best %s loss: ' % basis.loss_type, best_test_loss
             else:
                 n_test_inc += 1
                 print 'iters without better %s loss: ' % basis.loss_type, n_test_inc
+            if err < best_test_loss:
+                best_test_loss = err
+                best_theta = copy.deepcopy(basis.theta)
 
         basis.theta = best_theta
 

@@ -13,7 +13,10 @@ import grid_world
 from scipy.optimize import fmin_cg
 from rl import Model
 
-
+theano.gof.compilelock.set_lock_status(False)
+theano.config.warn.sum_div_dimshuffle_bug = False
+theano.config.on_unused_input = 'ignore'
+        
 
 class BellmanBasis:
 
@@ -23,7 +26,7 @@ class BellmanBasis:
 
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None, w = None,
                  reg_tuple = None, partition = None, wrt = ['theta-all','w'],
-                 nonlin = None, nonzero = None, record_loss = None):
+                 nonlin = None, nonzero = None, record_loss = None, shift = 1e-6):
 
         theano.gof.compilelock.set_lock_status(False)
         theano.config.warn.sum_div_dimshuffle_bug = False
@@ -33,6 +36,7 @@ class BellmanBasis:
         self.k = k # num of features/columns
         self.loss_type = loss_type
         self.nonzero = nonzero  # set this to some positive float to penalize zero theta vectors.
+        self.shift = shift
 
         if theta is None: 
             theta = 1e-6 * numpy.random.standard_normal((self.n, self.k))
@@ -73,10 +77,8 @@ class BellmanBasis:
         self.PHI0_t = self.PHI_full_t[0:self.PHIlam_t.shape[0],:]
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T 
 
-        self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) 
-        self.cov_inv = theano.sandbox.linalg.matrix_inverse(self.cov)
-        #self.cov_inv = theano.sandbox.linalg.matrix_inverse(TS.structured_add(
-        #        self.cov, self.shift_t * TS.square_diagonal(TT.ones((k,))))) # l2 reg to avoid sing matrix
+        self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + TS.square_diagonal(TT.ones((k,)) * self.shift) 
+        self.cov_inv = theano.sandbox.linalg.matrix_inverse(self.cov) # l2 reg to avoid sing matrix
 
         # precompile theano functions and gradients.
         #self.losses = {lo: self.compile_loss(lo) for lo in self.LOSSES} # older pythons do not like
@@ -186,7 +188,8 @@ class BellmanBasis:
         ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
         b = TT.dot(self.PHI0_t.T, self.Rlam_t)
-        a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) 
+        
+        a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) + TS.square_diagonal(TT.ones((k,)) * self.shift) 
         #w_lstd = theano.sandbox.linalg.solve(a,b) # solve currently has no gradient implemented
         #A = theano.sandbox.linalg.matrix_inverse( TS.structured_add( \
         #         a, self.shift_t * TS.square_diagonal(TT.ones((self.k,))))) # l2 reg to avoid sing matrix
