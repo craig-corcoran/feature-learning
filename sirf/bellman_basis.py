@@ -244,7 +244,7 @@ class BellmanBasis:
         if self.nonzero:
             nz_loss, _ = self.losses['nonzero']
             loss += self.nonzero * nz_loss(theta, w, S, R, Mphi, Mrew)
-        return loss / (S.shape[0] * self.n) # norm loss by num samples and dim of data
+        return loss #/ (S.shape[0] * self.n) # norm loss by num samples and dim of data
         
     def grad(self, vec, S, R, Mphi, Mrew):
         
@@ -277,7 +277,7 @@ class BellmanBasis:
                     j,k = self.d_part_inds[v]
                     th_grad[:,j:k] = grad
 
-        grad = grad / (S.shape[0] * self.n) # norm grad by num samples and dim of data
+        grad = grad #/ (S.shape[0] * self.n) # norm grad by num samples and dim of data
         return numpy.append(th_grad.flatten(), w_grad.flatten())
     
     @staticmethod
@@ -292,18 +292,16 @@ class BellmanBasis:
         return n_time_steps
 
     @staticmethod
-    def get_mixing_matrices(m, lam, gam, sampled = True, eps = 1e-5, dim = None):
+    def get_mixing_matrices(m, lam, gam, sampled = True, eps = 1e-5):
         ''' returns a matrix for combining feature vectors from different time
         steps for use in TD(lambda) algorithms. m is the number of final
-        rows/samples, dim is the dimension (equal to m and not needed if not
-        sampled), and n_steps is the number of extra time steps. Here we use
+        rows/samples, and n_steps is the number of extra time steps. Here we use
         only all m+n_step updates; slightly different than recursive TD
         algorithm, which uses all updates from all samples '''
 
         n_steps = BellmanBasis._calc_n_steps(lam, gam, eps = eps)
         vec = map(lambda i: (lam*gam)**i, xrange(n_steps)) # decaying weight vector
         if sampled:
-            assert dim is not None
             M = numpy.zeros((m, m + n_steps-1))
             for i in xrange(m): # for each row
                 M[i, i:i+n_steps] = vec
