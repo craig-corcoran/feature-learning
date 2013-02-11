@@ -306,8 +306,8 @@ class MDP:
         return s, s_p, a, a_p, rewards
 
 
-    def sample_grid_world(self, n_samples, state_rep = 'tabular', 
-                            distribution = 'policy', require_reward = False):
+    def sample_grid_world(self, n_samples, state_rep = 'tabular', distribution = 'policy', 
+                    require_reward = False, add_const_feat = True):
         ''' returns samples from the grid world mdp
         using state_rep for the features and sampling from the given 
         distribution type, either on-policy or uniform (one-step). samples are
@@ -346,7 +346,15 @@ class MDP:
                 X[i,2*n_state_var] = rewards[i]     
                 X[i,2*n_state_var + 1:] = self.env.action_to_code[tuple(actions[i,:])]
 
-        return X[:,:n_state_var], X[:,n_state_var:2*n_state_var], X[:,2*n_state_var:2*n_state_var+1], X[:,2*n_state_var + 1:]
+        S = X[:,:n_state_var]
+        Sp = X[:,n_state_var:2*n_state_var]
+        if add_const_feat:
+            S = numpy.hstack((S, numpy.ones((S.shape[0], 1))))
+            Sp = numpy.hstack((Sp, numpy.ones((Sp.shape[0], 1))))
+        r = X[:,2*n_state_var:2*n_state_var+1]
+        a = X[:,2*n_state_var + 1:]
+
+        return S, Sp, r, a
 
 def main():
     mdp = MDP()

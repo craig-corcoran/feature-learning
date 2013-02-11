@@ -18,8 +18,8 @@ theano.gof.compilelock.set_lock_status(False)
 theano.config.warn.sum_div_dimshuffle_bug = False
 theano.config.on_unused_input = 'ignore'
         
+logger = sirf.get_logger(__name__)
 
-# logging
 # weighting and loss measures - policy loss
 # include reward learning
 # nonlinear feature setup
@@ -44,6 +44,7 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
     dim = env_size**2
 
     # tracked losses
+    logger.
     losses = ['test-bellman', 'test-reward', 'test-model'] #, 'true-bellman', 'true-lsq']
     
     #n_extra = bb._calc_n_steps(lam, gam, eps)
@@ -118,7 +119,7 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
 def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi, 
             Mrew, patience, max_iter, weighting):
     
-    #print 'training with %i samples and %s loss' % (S.shape[0], method)
+    logger.info( 'training with %i samples and %s method' % (S.shape[0], method))
 
     if (method == 'covariance'): 
         bb.set_loss(method, ['theta-all'])
@@ -150,7 +151,7 @@ def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi,
   
 
 def train_basis(basis, S, R, S_test, R_test, Mphi, Mrew, patience, 
-                    max_iter, weighting, min_imp = 1e-8):
+                    max_iter, weighting, min_imp = 1e-3):
     try:
         n_test_inc = 0
         best_test_loss = numpy.inf

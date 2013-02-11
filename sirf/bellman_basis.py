@@ -8,6 +8,7 @@ import theano.sparse
 import theano.sparse as TS
 import theano.sandbox.linalg
 import matplotlib.pyplot as plt
+import sirf
 import condor
 import grid_world
 from scipy.optimize import fmin_cg
@@ -17,12 +18,12 @@ theano.gof.compilelock.set_lock_status(False)
 theano.config.warn.sum_div_dimshuffle_bug = False
 theano.config.on_unused_input = 'ignore'
         
+logger = sirf.get_logger(__name__)
 
 class BellmanBasis:
 
     LOSSES = 'bellman layered model reward covariance nonzero l1code l1theta'.split()
     RECORDABLE = 'test-bellman test-reward test-model'.split()# true-bellman true-lsq'.split()
-    #PARTITIONS = 'theta-all theta-model theta-reward w'.split()
 
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None, w = None,
                  reg_tuple = None, partition = None, wrt = ['theta-all','w'],
@@ -31,6 +32,8 @@ class BellmanBasis:
         theano.gof.compilelock.set_lock_status(False)
         theano.config.warn.sum_div_dimshuffle_bug = False
         theano.config.on_unused_input = 'ignore'
+
+        logger.info('building bellman basis')
         
         self.n = n # dim of data
         self.k = k # num of features/columns
@@ -79,6 +82,8 @@ class BellmanBasis:
 
         self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + TS.square_diagonal(TT.ones((k,)) * self.shift) 
         self.cov_inv = theano.sandbox.linalg.matrix_inverse(self.cov) # l2 reg to avoid sing matrix
+        
+        logger.info('compiling theano losses')
 
         # precompile theano functions and gradients.
         #self.losses = {lo: self.compile_loss(lo) for lo in self.LOSSES} # older pythons do not like
@@ -189,7 +194,7 @@ class BellmanBasis:
         # lstd weights for bellman error using normal eqns
         b = TT.dot(self.PHI0_t.T, self.Rlam_t)
         
-        a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) + TS.square_diagonal(TT.ones((k,)) * self.shift) 
+        a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) + TS.square_diagonal(TT.ones((self.k,)) * self.shift) 
         #w_lstd = theano.sandbox.linalg.solve(a,b) # solve currently has no gradient implemented
         #A = theano.sandbox.linalg.matrix_inverse( TS.structured_add( \
         #         a, self.shift_t * TS.square_diagonal(TT.ones((self.k,))))) # l2 reg to avoid sing matrix
@@ -371,6 +376,8 @@ class BellmanBasis:
 
 def plot_features(phi, r = None, c = None):
     
+    logger.info('plotting features')
+
     plt.clf()
     j,k = phi.shape
     if r is None:
