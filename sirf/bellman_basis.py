@@ -38,17 +38,20 @@ class BellmanBasis:
         self.shift = shift
 
         if theta is None: 
-            theta = 1e-6 * numpy.random.standard_normal((self.n + 1, self.k))
+            theta = 1e-6 * numpy.random.standard_normal((self.n, self.k))
             theta /= numpy.sqrt((theta * theta).sum(axis=0))
             # initialize features sparsely
             #sparsity = 0.8
             #for i in xrange(self.k):
                 #z = numpy.random.random(self.n)
                 #theta[:,i][z < sparsity] = 0.
+        else: assert (theta.shape == (k*n,)) or (theta.shape == (self.n, self.k))
+
         if w is None:
-            w = numpy.random.standard_normal((self.k,1))
+            w = numpy.random.standard_normal((self.k+1,1))
             w = w / numpy.linalg.norm(w)
-        else: assert (theta.shape == (k*(n),)) or (theta.shape == (self.n, self.k))
+        else: assert (w.shape == (k+1,)) or (w.shape == (k+1, 1))
+
         self.set_params(theta = theta, w = w)
 
         # partition the features for gradients
@@ -205,7 +208,8 @@ class BellmanBasis:
 
     def layered_funcs(self):
         ''' uses self.w_t when measuring loss'''
-        e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), self.w_t) # error vector
+        A = TT.horizontal_stack((self.PHI0_t - self.PHIlam_t), TT.ones((self.PHI0_t.shape[0],1))) # append const feature
+        e_be = self.Rlam_t - TT.dot(A, self.w_t) # error vector
         return TT.sqrt(TT.sum(TT.sqr(e_be))) 
         
     def reward_funcs(self):
@@ -353,7 +357,7 @@ class BellmanBasis:
         if theta is not None:
             self.theta = self._reshape_theta(theta)
         if w is not None:
-            self.w = numpy.reshape(w, (self.k, 1))
+            self.w = numpy.reshape(w, (self.k+1, 1))
 
     def _reshape_theta(self, theta = None):
         if theta is None:
@@ -363,7 +367,7 @@ class BellmanBasis:
     def _unpack_params(self, vec):
         n_theta_vars = self.k*self.n
         theta = self._reshape_theta(vec[:n_theta_vars])
-        w = numpy.reshape(vec[n_theta_vars:], (self.k, 1))
+        w = numpy.reshape(vec[n_theta_vars:], (self.k+1, 1))
         return theta, w
     
     @property

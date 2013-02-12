@@ -1,3 +1,4 @@
+import os
 import copy
 import cPickle as pickle
 import numpy
@@ -20,21 +21,22 @@ theano.config.on_unused_input = 'ignore'
         
 logger = sirf.get_logger(__name__)
 
+# update model / perfect info loss
 # weighting and loss measures - policy loss
 # include reward learning
 # nonlinear feature setup
-def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam = 0., eps = 1e-5,  
-    partition = None, patience = 1, max_iter = 3, weighting = 'uniform',
+def experiment(workers = 40, n_runs = 8, k = 16, env_size = 15, gam = 0.995, lam = 0., eps = 1e-5,  
+    partition = None, patience = 5, max_iter = 8, weighting = 'uniform',
     n_samples = None, beta_ratio = 1.,
-    training_methods = ['covariance', 'layered', 'covariance-layered']): 
+    training_methods = ['covariance', 'covariance-layered', 'layered']): 
     
     theano.gof.compilelock.set_lock_status(False)
     theano.config.on_unused_input = 'ignore'
     theano.config.warn.sum_div_dimshuffle_bug = False
 
     if n_samples is None:
-        n_samples = [100,500]
-        #n_samples = numpy.round(numpy.linspace(50,5000,8)).astype(int) # 50 to 5000 samples
+        #n_samples = [100,500]
+        n_samples = numpy.round(numpy.linspace(50,2000,6)).astype(int) # 50 to 2000 samples
 
     if partition is None:
         partition = {'theta-model':k-1, 'theta-reward':1}
@@ -45,7 +47,7 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
 
     # tracked losses
 
-    losses = ['test-bellman', 'test-reward', 'test-model'] #, 'true-bellman', 'true-lsq']
+    losses = ['test-bellman', 'test-reward', 'test-model'] #, 'true-bellman', 'true-lsq'] # XXX
     logger.info('losses tracked: '+ str(losses))
     
     #n_extra = bb._calc_n_steps(lam, gam, eps)
@@ -58,16 +60,17 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
 
         for i,n in enumerate(n_samples):
             
-            Mphi, Mrew = BellmanBasis.get_mixing_matrices(n+1, lam, gam, sampled = True, eps = eps, dim = dim)
+            Mphi, Mrew = BellmanBasis.get_mixing_matrices(n, lam, gam, sampled = True, eps = eps)
 
             for r in xrange(n_runs):
                 
                 # initialize features with unit norm
-                theta_init = numpy.random.standard_normal((dim, k))
-                theta_init[:,-1] = m.R # XXX set last column to reward
+                theta_init = numpy.random.standard_normal((dim+1, k))
+                theta_init[:-1,-1] = m.R # XXX set last column to reward
+                theta_init[-1,-1] = 0
                 theta_init /= numpy.sqrt((theta_init * theta_init).sum(axis=0))
 
-                w_init = numpy.random.standard_normal((k,1)) 
+                w_init = numpy.random.standard_normal((k+1,1)) 
                 w_init = w_init / numpy.linalg.norm(w_init)
 
                 # sample data and hold-out test set
@@ -92,7 +95,7 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
 
     # save results!
 
-    out_path = './sirf/output/pickle/n_sample_results.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' \
+    out_path = os.getcwd()+'/sirf/output/pickle/n_sample_results.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' \
                         % (k, str(lam), str(gam), weighting, env_size, n_runs)
     logger.info('saving results to %s' % out_path)
     with util.openz(out_path, "wb") as out_file:
@@ -110,13 +113,13 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
 
             std = numpy.std(mat[:,:,h], axis=1)
             mn = numpy.mean(mat[:,:,h], axis=1)
-            ax.fill_between(x, mn-std, mn+std)
+            ax.fill_between(x, mn-std, mn+std, facecolor='yellow', alpha=0.2)
             ax.plot(x, mn, plot_styles[h], label = tm)
             plt.title(key)
             plt.axis('off')
             #plt.legend(loc = 3) # lower left
 
-    plt.savefig('./sirf/output/plots/n_samples.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
+    plt.savefig(os.getcwd()+'/sirf/output/plots/n_samples.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
             % (k, str(lam), str(gam), weighting, env_size, n_runs))  
 
 def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi, 
@@ -148,7 +151,7 @@ def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi,
         if 'test' in key:
             d_batch_loss[key] = fun(bb.theta, bb.w, S_test, R_test, Mphi, Mrew) 
         elif 'true' in key:
-            d_batch_loss[key] = fun(bb.theta, weighting = weighting) # TODO include lambda here/model, also w 
+            d_batch_loss[key] = fun(bb.theta[:-1], weighting = weighting) # TODO include lambda here/model, also w 
 
     return d_batch_loss, ind_tuple
   
