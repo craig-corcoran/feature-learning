@@ -123,10 +123,11 @@ def main(k = 16,
             print '\n user stopped current training loop'
 
     def output(prefix, suffix='pdf'):
-        return '%s.k=%i.reg=%s.lam=%s.gam=%s.b=%s.%s%s.%s' % (
+        return '%s.k=%i.reg=%s.lam=%s.gam=%s.b=%s.%s%s%s.%s' % (
             prefix, k,
             str(reg),
             lam, gam, beta, weighting,
+            '.samples=%d' % n_samples if n_samples else '',
             '.nonlin=%s' % nonlin if nonlin else '',
             suffix)
 
