@@ -44,8 +44,9 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
     dim = env_size**2
 
     # tracked losses
-    logger.
+
     losses = ['test-bellman', 'test-reward', 'test-model'] #, 'true-bellman', 'true-lsq']
+    logger.info('losses tracked: '+ str(losses))
     
     #n_extra = bb._calc_n_steps(lam, gam, eps)
     #print 'n extra sampled needed: ', n_extra
@@ -57,7 +58,7 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
 
         for i,n in enumerate(n_samples):
             
-            Mphi, Mrew = BellmanBasis.get_mixing_matrices(n, lam, gam, sampled = True, eps = eps, dim = dim)
+            Mphi, Mrew = BellmanBasis.get_mixing_matrices(n+1, lam, gam, sampled = True, eps = eps, dim = dim)
 
             for r in xrange(n_runs):
                 
@@ -75,7 +76,7 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
                 S_test, Sp_test, R_test, _, = mdp.sample_grid_world(n, distribution = weighting)
                 S_test = scipy.sparse.vstack((S_test, Sp_test[-1,:]))
 
-                bb = BellmanBasis(dim, k, beta_ratio, partition = partition, 
+                bb = BellmanBasis(dim+1, k, beta_ratio, partition = partition, 
                     theta = theta_init, w = w_init, record_loss = losses)
                 
                 for j,tm in enumerate(training_methods):
@@ -90,14 +91,16 @@ def experiment(workers = 2, n_runs = 1, k = 16, env_size = 15, gam = 0.995, lam 
                 d_loss_data[name][ind_tuple] = d_batch_loss[name]
 
     # save results!
+
     out_path = './sirf/output/pickle/n_sample_results.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' \
                         % (k, str(lam), str(gam), weighting, env_size, n_runs)
+    logger.info('saving results to %s' % out_path)
     with util.openz(out_path, "wb") as out_file:
         pickle.dump(d_loss_data, out_file, protocol = -1)
     
     x = range(len(n_samples))
     f = plt.figure()
-    
+    logger.info('plotting')
     plot_styles = ['r-', 'b-', 'g-']
     for i,(key,mat) in enumerate(d_loss_data.items()):
 

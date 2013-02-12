@@ -42,7 +42,7 @@ class BellmanBasis:
         self.shift = shift
 
         if theta is None: 
-            theta = 1e-6 * numpy.random.standard_normal((self.n, self.k))
+            theta = 1e-6 * numpy.random.standard_normal((self.n + 1, self.k))
             theta /= numpy.sqrt((theta * theta).sum(axis=0))
             # initialize features sparsely
             #sparsity = 0.8
@@ -52,7 +52,7 @@ class BellmanBasis:
         if w is None:
             w = numpy.random.standard_normal((self.k,1))
             w = w / numpy.linalg.norm(w)
-        else: assert (theta.shape == (k*n,)) or (theta.shape == (self.n, self.k))
+        else: assert (theta.shape == (k*(n),)) or (theta.shape == (self.n, self.k))
         self.set_params(theta = theta, w = w)
 
         # partition the features for gradients
