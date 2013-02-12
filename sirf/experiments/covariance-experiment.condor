@@ -1,0 +1,30 @@
++Group = "GRAD"
++Project = "AI_ROBOTICS"
++ProjectDescription = "RL with experimental loss function"
+
+universe = vanilla
+notification = complete
+requirements = (InMastodon == false) && (Memory >= 1024) && (Arch == "X86_64")
+rank = KFlops
+getenv = True
+executable = ./covariance-experiment.sh
+log = covariance-experiment.log
+
+# change this as needed to point to the source directory containing the shell script.
+initialdir = /u/leif/src/feature-learning/sirf/experiments
+
+# queue up different experiments.
+arguments = -n-samples 100
+output = covariance-experiment-100.$(Process).out
+error = covariance-experiment-100.$(Process).err
+Queue 1
+
+arguments = -n-samples 200
+output = covariance-experiment-200.$(Process).out
+error = covariance-experiment-200.$(Process).err
+Queue 1
+
+arguments = -n-samples 400
+output = covariance-experiment-400.$(Process).out
+error = covariance-experiment-400.$(Process).err
+Queue 1

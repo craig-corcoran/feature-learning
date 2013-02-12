@@ -22,7 +22,7 @@ logger = sirf.get_logger(__name__)
 
 class BellmanBasis:
 
-    LOSSES = 'bellman layered model reward covariance nonzero l1code l1theta'.split()
+    LOSSES = 'bellman layered model reward covariance prediction nonzero l1code l1theta'.split()
     RECORDABLE = 'test-bellman test-reward test-model'.split()# true-bellman true-lsq'.split()
 
     def __init__(self, n, k, beta, loss_type = 'bellman', theta = None, w = None,
@@ -179,7 +179,6 @@ class BellmanBasis:
         self.wrt = wrt
         self.loss_func, self.loss_grads = self.losses[loss_type]
         
-
     def l1code_funcs(self):
         '''Minimize the size of the feature values.'''
         return TT.sum(TT.abs_(self.PHI_full_t))
@@ -205,7 +204,6 @@ class BellmanBasis:
         e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), w_lstd) # error vector
         return TT.sqrt(TT.sum(TT.sqr(e_be)))
 
-
     def layered_funcs(self):
         ''' uses self.w_t when measuring loss'''
         A = TT.horizontal_stack((self.PHI0_t - self.PHIlam_t), TT.ones((self.PHI0_t.shape[0],1))) # append const feature
@@ -213,7 +211,6 @@ class BellmanBasis:
         return TT.sqrt(TT.sum(TT.sqr(e_be))) 
         
     def reward_funcs(self):
-        
         # reward loss: ||(PHI0 (PHI0.T * PHI0))^-1 PHI0.T * Rlam - Rlam||
         d = TT.dot(self.PHI0_t.T, self.Rlam_t)
         w_r = TT.dot(self.cov_inv, d)
@@ -221,7 +218,6 @@ class BellmanBasis:
         return TT.sqrt(TT.sum(TT.sqr(e_r)))
 
     def model_funcs(self):
-        
         # model loss: ||PHI0 (PHI0.T * PHI0)^-1 PHI0.T * PHIlam - PHIlam|| 
         bb = TT.dot(self.PHI0_t.T, self.PHIlam_t)
         w_m = TT.dot(self.cov_inv, bb) # least squares weight matrix
@@ -229,13 +225,16 @@ class BellmanBasis:
         return TT.sqrt(TT.sum(TT.sqr(e_m))) # frobenius norm
 
     def covariance_funcs(self):
-        
         # todo weight by stationary distribution if unsampled?
         A = self.cov - self.beta_t * TT.dot(self.PHI0_t.T,self.PHIlam_t)
         return TT.sum(TT.abs_(A))
 
+    def prediction_funcs(self):
+        # next-step feature loss: || PHI0 PHI0.T PHIlam - PHIlam ||
+        A = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, self.PHIlam_t)) - self.PHIlam_t
+        return TT.sqrt(TT.sum(TT.sqr(A))) # frobenius norm
+
     def loss(self, vec, S, R, Mphi, Mrew):
-        
         theta, w = self._unpack_params(vec)
         loss =  self.loss_func(theta, w, S, R, Mphi, Mrew)
         #print 'loss pre reg: ', loss
