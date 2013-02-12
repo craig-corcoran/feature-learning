@@ -29,12 +29,8 @@ class BellmanBasis:
                  reg_tuple = None, partition = None, wrt = ['theta-all','w'],
                  nonlin = None, nonzero = None, record_loss = None, shift = 1e-6):
 
-        theano.gof.compilelock.set_lock_status(False)
-        theano.config.warn.sum_div_dimshuffle_bug = False
-        theano.config.on_unused_input = 'ignore'
-
         logger.info('building bellman basis')
-        
+
         self.n = n # dim of data
         self.k = k # num of features/columns
         self.loss_type = loss_type
@@ -124,6 +120,10 @@ class BellmanBasis:
     def set_recorded_loss(self, losses):   
         self.d_recordable = dict(zip(self.RECORDABLE, self.record_funs))
         self.d_loss_funcs = {}
+        if losses is None:
+            return
+        if not isinstance(losses, (tuple, list)):
+            losses = [losses]
         for lo in losses:
             self.d_loss_funcs[lo] = self.d_recordable[lo]
                 
@@ -193,8 +193,7 @@ class BellmanBasis:
         ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
         b = TT.dot(self.PHI0_t.T, self.Rlam_t)
-        
-        a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) + TS.square_diagonal(TT.ones((self.k,)) * self.shift) 
+        a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) + TS.square_diagonal(TT.ones((self.k, )) * self.shift) 
         #w_lstd = theano.sandbox.linalg.solve(a,b) # solve currently has no gradient implemented
         #A = theano.sandbox.linalg.matrix_inverse( TS.structured_add( \
         #         a, self.shift_t * TS.square_diagonal(TT.ones((self.k,))))) # l2 reg to avoid sing matrix
@@ -245,7 +244,7 @@ class BellmanBasis:
         if self.nonzero:
             nz_loss, _ = self.losses['nonzero']
             loss += self.nonzero * nz_loss(theta, w, S, R, Mphi, Mrew)
-        return loss / (S.shape[0] * self.n) # norm loss by num samples and dim of data
+        return loss #/ (S.shape[0] * self.n) # norm loss by num samples and dim of data
         
     def grad(self, vec, S, R, Mphi, Mrew):
         
@@ -278,11 +277,11 @@ class BellmanBasis:
                     j,k = self.d_part_inds[v]
                     th_grad[:,j:k] = grad
 
-        grad = grad / (S.shape[0] * self.n) # norm grad by num samples and dim of data
+        grad = grad #/ (S.shape[0] * self.n) # norm grad by num samples and dim of data
         return numpy.append(th_grad.flatten(), w_grad.flatten())
     
-    @classmethod
-    def _calc_n_steps(self, lam, gam, eps):
+    @staticmethod
+    def _calc_n_steps(lam, gam, eps):
 
         # calculate number of steps to perform lambda-averaging over
         if lam == 0:
@@ -292,19 +291,17 @@ class BellmanBasis:
 
         return n_time_steps
 
-    @classmethod
-    def get_mixing_matrices(self, m, lam, gam, sampled = True, eps = 1e-5, dim = None):
+    @staticmethod
+    def get_mixing_matrices(m, lam, gam, sampled = True, eps = 1e-5):
         ''' returns a matrix for combining feature vectors from different time
         steps for use in TD(lambda) algorithms. m is the number of final
-        rows/samples, dim is the dimension (equal to m and not needed if not
-        sampled), and n_steps is the number of extra time steps. Here we use
+        rows/samples, and n_steps is the number of extra time steps. Here we use
         only all m+n_step updates; slightly different than recursive TD
         algorithm, which uses all updates from all samples '''
 
         n_steps = BellmanBasis._calc_n_steps(lam, gam, eps = eps)
         vec = map(lambda i: (lam*gam)**i, xrange(n_steps)) # decaying weight vector
         if sampled:
-            assert dim is not None
             M = numpy.zeros((m, m + n_steps-1))
             for i in xrange(m): # for each row
                 M[i, i:i+n_steps] = vec
