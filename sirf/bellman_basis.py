@@ -23,11 +23,12 @@ logger = sirf.get_logger(__name__)
 class BellmanBasis:
 
     LOSSES = 'bellman layered model reward covariance prediction nonzero l1code l1theta'.split()
-    RECORDABLE = 'test-bellman test-reward test-model'.split()# true-bellman true-lsq'.split()
 
-    def __init__(self, n, k, beta, loss_type = 'bellman', theta = None, w = None,
-                 reg_tuple = None, partition = None, wrt = ['theta-all','w'],
-                 nonlin = None, nonzero = None, record_loss = None, shift = 1e-6):
+    def __init__(self, n, k, beta, 
+                loss_type = 'bellman', theta = None, w = None,
+                reg_tuple = None, partition = None, wrt = ['theta-all','w'],
+                nonlin = None, nonzero = None, 
+                record_loss = None, shift = 1e-6):
 
         logger.info('building bellman basis')
 
@@ -36,7 +37,7 @@ class BellmanBasis:
         self.loss_type = loss_type
         self.nonzero = nonzero  # set this to some positive float to penalize zero theta vectors.
         self.shift = shift
-
+        
         if theta is None: 
             theta = 1e-6 * numpy.random.standard_normal((self.n, self.k))
             theta /= numpy.sqrt((theta * theta).sum(axis=0))
@@ -90,7 +91,7 @@ class BellmanBasis:
 
         self.set_loss(loss_type, wrt)
         self.set_regularizer(reg_tuple)
-        self.set_recorded_loss(record_loss)
+        #self.set_recorded_loss(record_loss)
         
     @property
     def loss_be(self):
@@ -107,28 +108,16 @@ class BellmanBasis:
     @property
     def theano_vars(self):
         return [self.theta_t, self.w_t, self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t]
-    
-    #@property
-    #def m_bellman_error(self):
-        #return self.model.bellman_error
-    
-    #@property
-    #def m_value_error(self):
-        #return self.model.bellman_error
-
-    @property
-    def record_funs(self):
-        return [self.loss_be , self.loss_r, self.loss_m] #, self.m_bellman_error, self.m_value_error]
-
-    def set_recorded_loss(self, losses):   
-        self.d_recordable = dict(zip(self.RECORDABLE, self.record_funs))
-        self.d_loss_funcs = {}
-        if losses is None:
-            return
-        if not isinstance(losses, (tuple, list)):
-            losses = [losses]
-        for lo in losses:
-            self.d_loss_funcs[lo] = self.d_recordable[lo]
+     
+    #def set_recorded_loss(self, losses):   
+        #self.d_recordable = dict(zip(self.RECORDABLE, self.record_funs))
+        #self.d_loss_funcs = {}
+        #if losses is None:
+            #return
+        #if not isinstance(losses, (tuple, list)):
+            #losses = [losses]
+        #for lo in losses:
+            #self.d_loss_funcs[lo] = self.d_recordable[lo]
                 
 
     def compile_loss(self, loss):
@@ -197,9 +186,6 @@ class BellmanBasis:
         b = TT.dot(self.PHI0_t.T, self.Rlam_t)
         a = TT.dot(self.PHI0_t.T, (self.PHI0_t - self.PHIlam_t)) + TS.square_diagonal(TT.ones((self.k, )) * self.shift) 
         #w_lstd = theano.sandbox.linalg.solve(a,b) # solve currently has no gradient implemented
-        #A = theano.sandbox.linalg.matrix_inverse( TS.structured_add( \
-        #         a, self.shift_t * TS.square_diagonal(TT.ones((self.k,))))) # l2 reg to avoid sing matrix
-        #w_lstd = TT.dot(A, b)
         w_lstd = TT.dot(theano.sandbox.linalg.matrix_inverse(a), b)
         e_be = self.Rlam_t - TT.dot((self.PHI0_t - self.PHIlam_t), w_lstd) # error vector
         return TT.sqrt(TT.sum(TT.sqr(e_be)))
@@ -372,6 +358,7 @@ class BellmanBasis:
     @property
     def flat_params(self):        
         return numpy.append(self.theta.flatten(), self.w.flatten())
+
 
 
 def plot_features(phi, r = None, c = None):

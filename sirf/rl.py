@@ -1,12 +1,6 @@
-import copy
 import numpy
 import scipy.sparse
 import theano
-import theano.sparse
-import theano.sandbox.linalg
-import grid_world
-import matplotlib.pyplot as plt
-from scipy.optimize import fmin_cg
 
 #TODO lambda version and distribution weighting
 

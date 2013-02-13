@@ -7,8 +7,6 @@ import matplotlib.pyplot as plt
 import scipy.sparse
 import condor
 import sirf
-#import util
-#import grid_world
 import sirf.util as util
 import sirf.grid_world as grid_world
 from sirf.rl import Model
@@ -25,10 +23,27 @@ logger = sirf.get_logger(__name__)
 # weighting and loss measures - policy loss
 # include reward learning
 # nonlinear feature setup
-def experiment(workers = 40, n_runs = 8, k = 16, env_size = 15, gam = 0.995, lam = 0., eps = 1e-5,  
-    partition = None, patience = 5, max_iter = 8, weighting = 'uniform',
-    n_samples = None, beta_ratio = 1.,
-    training_methods = ['covariance', 'covariance-layered', 'layered']): 
+def experiment(workers = 80, n_runs = 15, k = 16, env_size = 15, gam = 0.998, lam = 0., eps = 1e-5,  
+    partition = None, patience = 8, max_iter = 8, weighting = 'uniform', reward_init = False,
+    nonlin = 1e-8, n_samples = None, beta_ratio = 1.,
+    training_methods = None):
+    
+    if training_methods is None:
+        # note: for each loss string, you need a corresponding wrt list
+        if reward_init:
+            training_methods = [
+            (['prediction'],[['theta-model']]),
+            (['prediction', 'layered'], [['theta-model'],['theta-model','w']]),
+            (['covariance'],[['theta-model']]), # with reward, without fine-tuning
+            (['covariance', 'layered'], [['theta-model'],['theta-model','w']]), # theta-model here for 2nd wrt?
+            (['layered'], [['theta-all','w']])] # baseline
+        
+        else:
+            training_methods = [(['prediction'],[['theta-all']]),
+            (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
+            (['covariance'],[['theta-all']]), # with reward, without fine-tuning
+            (['covariance', 'layered'], [['theta-all'],['theta-all','w']]), # theta-model here for 2nd wrt?
+            (['layered'], [['theta-all','w']])] # baseline
     
     theano.gof.compilelock.set_lock_status(False)
     theano.config.on_unused_input = 'ignore'
@@ -36,7 +51,7 @@ def experiment(workers = 40, n_runs = 8, k = 16, env_size = 15, gam = 0.995, lam
 
     if n_samples is None:
         #n_samples = [100,500]
-        n_samples = numpy.round(numpy.linspace(50,2000,6)).astype(int) # 50 to 2000 samples
+        n_samples = numpy.round(numpy.linspace(100,2000,10)).astype(int) # 50 to 2000 samples
 
     if partition is None:
         partition = {'theta-model':k-1, 'theta-reward':1}
@@ -47,7 +62,7 @@ def experiment(workers = 40, n_runs = 8, k = 16, env_size = 15, gam = 0.995, lam
 
     # tracked losses
 
-    losses = ['test-bellman', 'test-reward', 'test-model'] #, 'true-bellman', 'true-lsq'] # XXX
+    losses = ['test-bellman', 'test-reward', 'test-model', 'true-bellman', 'true-lsq'] 
     logger.info('losses tracked: '+ str(losses))
     
     #n_extra = bb._calc_n_steps(lam, gam, eps)
@@ -66,25 +81,29 @@ def experiment(workers = 40, n_runs = 8, k = 16, env_size = 15, gam = 0.995, lam
                 
                 # initialize features with unit norm
                 theta_init = numpy.random.standard_normal((dim+1, k))
-                theta_init[:-1,-1] = m.R # XXX set last column to reward
-                theta_init[-1,-1] = 0
+                if reward_init:
+                    theta_init[:-1,-1] = m.R # XXX set last column to reward
+                    theta_init[-1,-1] = 0
                 theta_init /= numpy.sqrt((theta_init * theta_init).sum(axis=0))
 
                 w_init = numpy.random.standard_normal((k+1,1)) 
                 w_init = w_init / numpy.linalg.norm(w_init)
 
-                # sample data and hold-out test set
+                # sample data: training, validation, and test sets
                 S, Sp, R, _, = mdp.sample_grid_world(n, distribution = weighting); 
                 S = numpy.vstack((S, Sp[-1,:]))
+                S_val, Sp_val, R_val, _, = mdp.sample_grid_world(n, distribution = weighting)
+                S_val = scipy.sparse.vstack((S_val, Sp_val[-1,:]))
                 S_test, Sp_test, R_test, _, = mdp.sample_grid_world(n, distribution = weighting)
                 S_test = scipy.sparse.vstack((S_test, Sp_test[-1,:]))
-
+                
                 bb = BellmanBasis(dim+1, k, beta_ratio, partition = partition, 
-                    theta = theta_init, w = w_init, record_loss = losses)
+                    theta = theta_init, w = w_init, record_loss = losses, nonlin = nonlin)
                 
                 for j,tm in enumerate(training_methods):
                     
-                    yield (condor_job,[(i,r,j), bb, tm, S, R, S_test, R_test,
+                    yield (condor_job,[(i,r,j), bb, m, tm, 
+                            S, R, S_val, R_val, S_test, R_test,
                             Mphi, Mrew, patience, max_iter, weighting])
 
     # aggregate the condor data
@@ -93,18 +112,18 @@ def experiment(workers = 40, n_runs = 8, k = 16, env_size = 15, gam = 0.995, lam
             for name in d_batch_loss.keys():
                 d_loss_data[name][ind_tuple] = d_batch_loss[name]
 
-    # save results!
-
-    out_path = os.getcwd()+'/sirf/output/pickle/n_sample_results.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' \
-                        % (k, str(lam), str(gam), weighting, env_size, n_runs)
+    # save results! 
+    pi_root = 'n_samples_results_rinit' if reward_init else 'n_samples_results'    
+    out_path = os.getcwd()+'/sirf/output/pickle/%s.no_r.k=%i.l=%s.g=%s.%s.size=%i.r=%i..pickle.gz' \
+                    % (pi_root, k, str(lam), str(gam), weighting, env_size, n_runs)
     logger.info('saving results to %s' % out_path)
     with util.openz(out_path, "wb") as out_file:
         pickle.dump(d_loss_data, out_file, protocol = -1)
     
-    x = range(len(n_samples))
+    x = numpy.array(n_samples, dtype = numpy.float64) #range(len(n_samples))
     f = plt.figure()
     logger.info('plotting')
-    plot_styles = ['r-', 'b-', 'g-']
+    plot_styles = ['r-', 'b-', 'g-', 'k-', 'c-', 'm-']
     for i,(key,mat) in enumerate(d_loss_data.items()):
 
         ax = f.add_subplot(2,3,i+1) # todo generalize for arb length 
@@ -113,51 +132,47 @@ def experiment(workers = 40, n_runs = 8, k = 16, env_size = 15, gam = 0.995, lam
 
             std = numpy.std(mat[:,:,h], axis=1)
             mn = numpy.mean(mat[:,:,h], axis=1)
-            ax.fill_between(x, mn-std, mn+std, facecolor='yellow', alpha=0.2)
-            ax.plot(x, mn, plot_styles[h], label = tm)
+            if 'test' in key:
+                mn = mn/x
+                std = std/x
+            ax.fill_between(x, mn-std, mn+std, facecolor='yellow', alpha=0.15)
+            ax.plot(x, mn, plot_styles[h], label = str(tm[0]))
             plt.title(key)
-            plt.axis('off')
+            #plt.axis('off')
             #plt.legend(loc = 3) # lower left
+    
+    pl_root = 'n_samples_rinit' if reward_init else 'n_samples'
+    plt.savefig(os.getcwd()+'/sirf/output/plots/%s.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
+            % (pl_root, k, str(lam), str(gam), weighting, env_size, n_runs))  
 
-    plt.savefig(os.getcwd()+'/sirf/output/plots/n_samples.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
-            % (k, str(lam), str(gam), weighting, env_size, n_runs))  
-
-def condor_job(ind_tuple, bb, method, S, R, S_test, R_test, Mphi, 
+def condor_job(ind_tuple, bb, model, method, S, R, S_val, R_val, S_test, R_test, Mphi, 
             Mrew, patience, max_iter, weighting):
     
     logger.info( 'training with %i samples and %s method' % (S.shape[0], method))
+    loss_list, wrt_list = method
+    assert len(loss_list) == len(wrt_list)
 
-    if (method == 'covariance'): 
-        bb.set_loss(method, ['theta-all'])
-        bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
-                                    patience, max_iter, weighting)
-    elif (method == 'layered'):
-        bb.set_loss(method, ['theta-all', 'w'])
-        bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
-                                    patience, max_iter, weighting)
-    elif method == 'covariance-layered':
-        bb.set_loss('covariance', ['theta-model'])
-        bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
-                                    patience, max_iter, weighting)
-        bb.set_loss('layered', ['theta-model', 'w'])
-        bb = train_basis(bb, S, R, S_test, R_test, Mphi, Mrew,
-                                    patience, max_iter, weighting) # b= redundant?
-    else:
-        print 'unrecognized training method string: ', method
-        assert False
-    
+    recordable = 'test-bellman test-reward test-model true-bellman true-lsq'.split()
+    record_funs = [bb.loss_be , bb.loss_r, bb.loss_m, model.bellman_error, model.value_error] # xxx hardcoded here
+    d_loss_funs = dict(zip(recordable, record_funs))
+
+    for i, loss in enumerate(loss_list):
+        bb.set_loss(loss, wrt_list[i])
+        bb = train_basis(bb, S, R, S_val, R_val, Mphi, Mrew, patience, 
+                    max_iter, weighting)
+ 
     d_batch_loss = {}
-    for key,fun in bb.d_loss_funcs.items():
+    for key,fun in d_loss_funs.items():
         if 'test' in key:
             d_batch_loss[key] = fun(bb.theta, bb.w, S_test, R_test, Mphi, Mrew) 
         elif 'true' in key:
-            d_batch_loss[key] = fun(bb.theta[:-1], weighting = weighting) # TODO include lambda here/model, also w 
+            d_batch_loss[key] = fun(bb.theta[:-1], weighting = weighting) # todo include lambda here/model, also w 
 
     return d_batch_loss, ind_tuple
   
 
 def train_basis(basis, S, R, S_test, R_test, Mphi, Mrew, patience, 
-                    max_iter, weighting, min_imp = 1e-3):
+                    max_iter, weighting, min_imp = 1e-5):
     try:
         n_test_inc = 0
         best_test_loss = numpy.inf
@@ -176,7 +191,7 @@ def train_basis(basis, S, R, S_test, R_test, Mphi, Mrew, patience,
                 print 'new best %s loss: ' % basis.loss_type, best_test_loss
             else:
                 n_test_inc += 1
-                print 'iters without better %s loss: ' % basis.loss_type, n_test_inc
+                logger.info( 'iters without better %s loss: ' % basis.loss_type, n_test_inc)
             if err < best_test_loss:
                 best_test_loss = err
                 best_theta = copy.deepcopy(basis.theta)
