@@ -262,7 +262,7 @@ class BellmanBasis:
                     grad += self.reg_param * l1_grads[i](theta, w, S, R, Mphi, Mrew)
                 if self.nonzero:
                     _, nz_grads = self.losses['nonzero']
-                    grad += self.reg_param * nz_grads[self.part_num](theta, w, S, R, Mphi, Mrew)
+                    grad += self.nonzero * nz_grads[i](theta, w, S, R, Mphi, Mrew)
 
                 if v == 'theta-all':
                     th_grad = grad
