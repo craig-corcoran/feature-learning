@@ -23,7 +23,7 @@ logger = sirf.get_logger(__name__)
 # weighting and loss measures - policy loss
 # include reward learning
 # nonlinear feature setup
-def experiment(workers = 80, n_runs = 15, k = 16, env_size = 15, gam = 0.998, lam = 0., eps = 1e-5,  
+def experiment(workers = 80, n_runs = 9, k = 16, env_size = 15, gam = 0.998, lam = 0., eps = 1e-5,  
     partition = None, patience = 8, max_iter = 8, weighting = 'uniform', reward_init = False,
     nonlin = 1e-8, n_samples = None, beta_ratio = 1.,
     training_methods = None):
@@ -51,7 +51,7 @@ def experiment(workers = 80, n_runs = 15, k = 16, env_size = 15, gam = 0.998, la
 
     if n_samples is None:
         #n_samples = [100,500]
-        n_samples = numpy.round(numpy.linspace(100,2000,10)).astype(int) # 50 to 2000 samples
+        n_samples = numpy.round(numpy.linspace(50,1500,6)).astype(int) 
 
     if partition is None:
         partition = {'theta-model':k-1, 'theta-reward':1}
@@ -142,8 +142,9 @@ def experiment(workers = 80, n_runs = 15, k = 16, env_size = 15, gam = 0.998, la
             #plt.legend(loc = 3) # lower left
     
     pl_root = 'n_samples_rinit' if reward_init else 'n_samples'
-    plt.savefig(os.getcwd()+'/sirf/output/plots/%s.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
-            % (pl_root, k, str(lam), str(gam), weighting, env_size, n_runs))  
+    plt.savefig(os.getcwd()+'/sirf/output/plots/%s.n=%i-%i.k=%i.l=%s.g=%s.%s.size=%i.r=%i.pdf' 
+        % (n_samples[0], n_samples[-1], pl_root, k, 
+        str(lam), str(gam), weighting, env_size, n_runs))  
 
 def condor_job(ind_tuple, bb, model, method, S, R, S_val, R_val, S_test, R_test, Mphi, 
             Mrew, patience, max_iter, weighting):
