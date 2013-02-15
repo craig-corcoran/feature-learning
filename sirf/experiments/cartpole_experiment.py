@@ -32,7 +32,7 @@ def sample(n):
 
 
 @sirf.annotations(
-    k=('number of features', 'option', None, int),
+    ks=('number of features', 'option', None),
     lam=('lambda for TD-lambda training', 'option', None, float),
     gam=('discount factor', 'option', None, float),
     beta=('covariance loss paramter', 'option', None, float),
@@ -50,7 +50,7 @@ def sample(n):
     method=('training method', 'option', None, int),
     output=('save results in this file', 'option', None, str),
     )
-def main(k = 16,
+def main(ks = 16,
          lam = 0.,
          gam = 0.999,
          beta = 0.99,
@@ -71,16 +71,12 @@ def main(k = 16,
     n = 4
 
     method = (
-        ('layered',            ('theta-all w', )), # baseline
-        ('prediction',         ('theta-model', )),
-        ('covariance',         ('theta-model', )), # with reward, without fine-tuning
-        ('prediction layered', ('theta-model', 'theta-model w')),
-        ('covariance layered', ('theta-model', 'theta-model w')), # theta-model here for 2nd wrt?
+        ('layered',            ('all', )), # baseline
+        ('prediction',         ('theta-all', )),
+        ('covariance',         ('theta-all', )), # with reward, without fine-tuning
+        ('prediction layered', ('theta-all', 'all')),
+        ('covariance layered', ('theta-all', 'all')), # theta-model here for 2nd wrt?
         )[method]
-
-    theano.gof.compilelock.set_lock_status(False)
-    theano.config.on_unused_input = 'ignore'
-    theano.config.warn.sum_div_dimshuffle_bug = False
 
     logger.info('constructing basis')
     reg = None
@@ -89,18 +85,11 @@ def main(k = 16,
     if l1code is not None:
         reg = ('l1-code', l1code)
 
-    bb = sirf.BellmanBasis(n + 1, k,
+    bb = sirf.BellmanBasis(n + 1, [int(k) for k in re.findall(r'\d+', str(ks))],
                            beta = beta / gam,
-                           partition = {'theta-model': k - 1, 'theta-reward': 1},
                            reg_tuple = reg,
                            nonlin = nonlin,
                            nonzero = nonzero)
-
-    theta_init = numpy.random.randn(n + 1, k)
-    theta_init /= numpy.sqrt((theta_init * theta_init).sum(axis=0))
-
-    w_init = numpy.random.randn(k + 1, 1)
-    w_init = w_init / numpy.linalg.norm(w_init)
 
     kw = dict(lam=lam, gam=gam, sampled=True, eps=eps)
 
@@ -129,14 +118,14 @@ def main(k = 16,
     losses = {r[0]: [] for r in recordable}
     def trace():
         for key, func, s, r, phi, rew in recordable:
-            loss = func(bb.theta, bb.w, s, r, phi, rew)
+            loss = func(*(bb.params + [s, r, phi, rew]))
             logger.info('loss %s: %s', key, loss)
             losses[key].append(loss)
 
     for loss, wrt in zip(loss_list.split(), wrt_list):
         bb.set_loss(loss, wrt.split())
         best_test_loss = 1e10
-        best_theta = None
+        best_params = None
         waiting = 0
 
         try:
@@ -156,9 +145,10 @@ def main(k = 16,
                 if (best_test_loss - err) / best_test_loss > min_imp:
                     waiting = 0
                     best_test_loss = err
-                    best_theta = 1 + bb.theta
+                    best_params = [p.copy() for p in bb.params]
                     logger.info('new best %s loss: %s', bb.loss_type, best_test_loss)
-                    logger.info('theta norms: %s', ' '.join('%.2f' % x for x in (bb.theta * bb.theta).sum(axis=0)))
+                    for d, t in enumerate(bb.thetas):
+                        logger.info('theta-%d norms: %s', d, ' '.join('%.2f' % x for x in (t * t).sum(axis=0)))
                 else:
                     waiting += 1
                     logger.info('iters without better %s loss: %s', bb.loss_type, waiting)
@@ -166,7 +156,7 @@ def main(k = 16,
                 if not it % 10:
                     trace()
 
-            bb.theta = best_theta - 1
+            bb.params = best_params
         except KeyboardInterrupt:
             print '\n user stopped current training loop'
 
@@ -178,14 +168,14 @@ def main(k = 16,
             )
         logger.info('saving results to %s.pickle.gz' % root)
         with sirf.openz(root + '.pickle.gz', 'wb') as handle:
-            pickle.dump((bb.theta, bb.w, losses), handle, protocol=-1)
+            pickle.dump((bb.thetas, losses), handle, protocol=-1)
 
         plot_features(root, bb)
 
 
 def plot_features(root, bb):
     logger.info('computing feature responses')
-    probe = numpy.zeros((bb.theta.shape[1], 11, 11, 11, 11), float)
+    probe = numpy.zeros((bb.thetas[-1].shape[0], 11, 11, 11, 11), float)
     for i, x in enumerate(numpy.linspace(-2.4, 2.4, 11)):
         for j, dx in enumerate(numpy.linspace(-10, 10, 11)):
             for k, t in enumerate(numpy.linspace(-0.2094384, 0.2094384, 11)):
