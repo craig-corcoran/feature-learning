@@ -5,12 +5,13 @@ import pickle
 import plac
 import scipy.optimize
 import scipy.sparse
+import theano
 import matplotlib.pyplot as plt
 
 import sirf.grid_world as grid_world
 import sirf.util as util
 from sirf.rl import Model
-from sirf.bellman_basis import plot_features, BellmanBasis as Basis
+from sirf.bellman_basis import plot_features, BellmanBasis 
 
 # mark shifts and best theta
 
@@ -32,13 +33,12 @@ theano.config.warn.sum_div_dimshuffle_bug = False
     l1code=('regularize feature code with this L1 parameter', 'option', None, float),
     state_rep=('represent world states this way', 'option', None, str, ['tabular', 'factored']),
     n_samples=('sample this many state transitions', 'option', None, int),
-    loss_types=('train on these losses in this order', 'option', None, str),
-    grad_vars=('compute gradient using these variables', 'option', None, str),
     nonlin=('feature nonlinearity', 'option', None, str, ['sigmoid', 'relu']),
     nonzero=('penalty for zero theta vectors', 'option', None, float),
     )
 def main(k = 16,
          env_size = 15,
+         n_runs = 1,
          lam = 0.,
          gam = 0.998,
          beta = 0.998,
@@ -51,8 +51,6 @@ def main(k = 16,
          l1code = None,
          state_rep = 'tabular',
          n_samples = None,
-         loss_types = 'covariance bellman',
-         grad_vars = 'model',
          nonlin = None,
          nonzero = None,
          training_methods = None
@@ -77,15 +75,6 @@ def main(k = 16,
     m = Model(mdp.env.R, mdp.env.P, gam = gam)
     m.gam = gam
 
-    print 'constructing basis'
-    reg = None
-    if l1theta is not None:
-        reg = ('l1-theta', l1theta)
-    if l1code is not None:
-        reg = ('l1-code', l1code)
-    bb = Basis(n + 1, k, beta_ratio, partition = partition, reg_tuple = reg, nonlin = nonlin, nonzero = nonzero)
-    bb.theta[:,-1] = numpy.hstack([m.R, [0]]) # initialize the last column as the reward function
-
     if n_samples:
         print 'sampling from a grid world'
         kw = dict(n_samples = n_samples, state_rep = state_rep, distribution = weighting)
@@ -95,28 +84,63 @@ def main(k = 16,
         X_val = scipy.sparse.vstack((S_val, Sp_val[-1, :]))
         S_test, Sp_test, R_test, _ = mdp.sample_grid_world(**kw)
         X_test = scipy.sparse.vstack((S_test, Sp_test[-1, :]))
+        losses = ['test-bellman', 'test-reward', 'test-model', 'true-bellman', 'true-lsq']
        
     else:
         print 'using perfect information'
         R = numpy.array([])
         X = scipy.sparse.eye(n, n)
         P = scipy.sparse.eye(n, n)
-        for i in xrange(bb._calc_n_steps(lam, gam, eps)): # decay epsilon 
+        for i in xrange(BellmanBasis._calc_n_steps(lam, gam, eps)): # decay epsilon 
             R = numpy.append(R, P * m.R)
             P = m.P * P
             X = scipy.sparse.vstack((X, P))
         R = R[:,None]
         X_val = X_test = X
         R_val = R_test = R
+        losses = ['true-bellman', 'true-model', 'true-reward', 'true-lsq']
 
     # build bellman operator matrices
     print 'making mixing matrices'
-    Mphi, Mrew = bb.get_mixing_matrices(n_samples or n, lam, gam, sampled = bool(n_samples), eps = eps)
+    Mphi, Mrew = BellmanBasis.get_mixing_matrices(n_samples or n, lam, gam, sampled = bool(n_samples), eps = eps)
 
-    test_loss = numpy.array([])
-    test_be = numpy.array([])
-    true_be = numpy.array([])
-    true_lsq = numpy.array([])
+    print 'constructing basis'
+    reg = None
+    if l1theta is not None:
+        reg = ('l1-theta', l1theta)
+    if l1code is not None:
+        reg = ('l1-code', l1code)
+
+    bb = BellmanBasis(n + 1, k, beta_ratio, partition = partition, reg_tuple = reg, nonlin = nonlin, nonzero = nonzero)
+    
+    # initialize features with unit norm
+    theta_init = numpy.random.standard_normal((n+1, k))
+    if not n_samples:
+        theta_init[:-1,-1] = m.R # set last column to reward
+        theta_init[-1,-1] = 0
+    theta_init /= numpy.sqrt((theta_init * theta_init).sum(axis=0))
+
+    w_init = numpy.random.standard_normal((k+1,1)) 
+    w_init = w_init / numpy.linalg.norm(w_init)
+
+    bb.theta[:,-1] = numpy.hstack([m.R, [0]]) # initialize the last column as the reward function
+
+    # initialize loss dictionary
+    d_loss_data = {}
+    for key in losses:
+        d_loss_data[key] = numpy.array([])     
+    
+    
+    for tm in training_methods:
+        loss_list, wrt_list = tm
+        assert len(loss_list) == len(wrt_list)
+
+        for i, loss in enumerate(loss_list):
+            bb.set_loss(loss, wrt_list[i])
+            bb = train_basis(bb, S, R, S_val, R_val, Mphi, Mrew, patience, 
+                        max_iter, weighting)
+
+
 
     for lt, wrt in zip(loss_types.split(), itertools.cycle(grad_vars.split())):
         try:
@@ -165,6 +189,60 @@ def main(k = 16,
     # plot value functions
     plot_value_functions(env_size, m, bb)
     plt.savefig(output('value'))
+
+def train_basis(basis, model, S, R, S_test, R_test, Mphi, Mrew, patience, 
+                    max_iter, weighting):
+    
+    test_loss = numpy.append(numpy.array([]), basis.loss(basis.flat_params, S, R, Mphi, Mrew))
+    test_be = numpy.append(numpy.array([]), basis.loss_be(basis.theta, basis.w, S, R, Mphi, Mrew))
+    true_be = numpy.append(numpy.array([]), model.bellman_error(basis.theta[:-1], weighting = weighting))
+    true_lsq = numpy.append(numpy.array([]), model.value_error(basis.theta[:-1], weighting = weighting))
+
+    it = 0
+    n_test_inc = 0
+    best_theta = None
+    best_test_loss = numpy.inf
+    try:
+        while (n_test_inc < patience):
+            it += 1
+            print '*** iteration', it, '***'
+            old_theta = copy.deepcopy(basis.theta)
+            basis.set_params( scipy.optimize.fmin_cg(basis.loss, basis.flat_params, basis.grad,
+                              args = (S, R, Mphi, Mrew),
+                              full_output = False,
+                              maxiter = max_iter, 
+                              gtol = 1e-8,
+                              ) )
+            delta = numpy.linalg.norm(old_theta-basis.theta)
+            print 'delta theta: ', delta
+
+            norms = numpy.apply_along_axis(numpy.linalg.norm, 0, basis.theta)
+            print 'column norms: %.2f min / %.2f avg / %.2f max' % (
+                norms.min(), norms.mean(), norms.max())
+            #basis.theta = numpy.apply_along_axis(lambda v: v/numpy.linalg.norm(v), 0, basis.theta)
+            
+            err = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew)
+            test_loss = numpy.append(test_loss, err)
+            test_be = numpy.append(test_be, basis.loss_be(basis.theta, basis.w, S, R, Mphi, Mrew))
+            true_be = numpy.append(true_be, model.bellman_error(basis.theta[:-1], weighting = weighting))
+            true_lsq = numpy.append(true_lsq, model.value_error(basis.theta[:-1], weighting = weighting))
+            
+            if err < best_test_loss:
+                best_test_loss = err
+                best_theta = copy.deepcopy(basis.theta)
+                n_test_inc = 0
+                print 'new best %s loss: ' % basis.loss_type, best_test_loss
+            else:
+                n_test_inc += 1
+                print 'iters without better %s loss: ' % basis.loss_type, n_test_inc
+
+    except KeyboardInterrupt:
+            print '\n user stopped current training loop'
+    
+    basis.theta = best_theta
+
+    return basis, test_loss, test_be, true_be, true_lsq
+
 
 
 def plot_value_functions(size, m, b):

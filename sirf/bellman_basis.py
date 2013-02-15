@@ -28,7 +28,7 @@ class BellmanBasis:
                 loss_type = 'bellman', theta = None, w = None,
                 reg_tuple = None, partition = None, wrt = ['theta-all','w'],
                 nonlin = None, nonzero = None, 
-                record_loss = None, shift = 1e-6):
+                shift = 1e-6):
 
         logger.info('building bellman basis')
 
