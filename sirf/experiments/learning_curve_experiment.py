@@ -8,6 +8,8 @@ import scipy.sparse
 import theano
 import matplotlib.pyplot as plt
 
+import condor
+import sirf
 import sirf.grid_world as grid_world
 import sirf.util as util
 from sirf.rl import Model
@@ -19,8 +21,11 @@ theano.gof.compilelock.set_lock_status(False)
 theano.config.on_unused_input = 'ignore'
 theano.config.warn.sum_div_dimshuffle_bug = False
 
+logger = sirf.get_logger(__name__)
+
 @plac.annotations(
     k=('number of features', 'option', None, int),
+    workers=('number of condor workers', 'option', None, int),
     env_size=('size of the grid world', 'option', 's', int),
     lam=('lambda for TD-lambda training', 'option', None, float),
     gam=('discount factor', 'option', None, float),
@@ -35,15 +40,17 @@ theano.config.warn.sum_div_dimshuffle_bug = False
     n_samples=('sample this many state transitions', 'option', None, int),
     nonlin=('feature nonlinearity', 'option', None, str, ['sigmoid', 'relu']),
     nonzero=('penalty for zero theta vectors', 'option', None, float),
+    training_methods=('list of tuples of loss fn list and wrt params list', 'option', None, int),
+    min_imp=('train until loss improvement percentage is less than this', 'option', None, int)
     )
 def main(k = 16,
+         workers = 0,
          env_size = 15,
          n_runs = 1,
          lam = 0.,
          gam = 0.998,
          beta = 0.998,
          eps = 1e-5, 
-         partition = None,
          patience = 15,
          max_iter = 15,
          weighting = 'uniform', 
@@ -53,20 +60,18 @@ def main(k = 16,
          n_samples = None,
          nonlin = None,
          nonzero = None,
-         training_methods = None
+         training_methods = None,
+         min_imp = 0.
          ):
 
     beta_ratio = beta/gam 
 
-    if partition is None:
-        partition = {'theta-model':k-1, 'theta-reward':1} 
-
     if training_methods is None:
         training_methods = [
-            (['prediction'],[['theta-model']]),
-            (['prediction', 'layered'], [['theta-model'],['theta-model','w']]),
-            (['covariance'],[['theta-model']]), # with reward, without fine-tuning
-            (['covariance', 'layered'], [['theta-model'],['theta-model','w']]), # theta-model here for 2nd wrt?
+            (['prediction'],[['theta-all']]),
+            (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
+            (['covariance'],[['theta-all']]), # with reward, without fine-tuning
+            (['covariance', 'layered'], [['theta-all'],['theta-all','w']]), # theta-model here for 2nd wrt?
             (['layered'], [['theta-all','w']])] # baseline
 
     print 'building environment'
@@ -100,8 +105,6 @@ def main(k = 16,
         R_val = R_test = R
         losses = ['true-bellman', 'true-model', 'true-reward', 'true-lsq']
 
-    reward_init = False if n_samples else True
-
     # build bellman operator matrices
     print 'making mixing matrices'
     Mphi, Mrew = BellmanBasis.get_mixing_matrices(n_samples or n, lam, gam, sampled = bool(n_samples), eps = eps)
@@ -116,41 +119,41 @@ def main(k = 16,
     
     # initialize features with unit norm
     theta_init = numpy.random.standard_normal((n+1, k))
-    if not n_samples:
-        theta_init[:-1,-1] = m.R # set last column to reward
-        theta_init[-1,-1] = 0
     theta_init /= numpy.sqrt((theta_init * theta_init).sum(axis=0))
 
     w_init = numpy.random.standard_normal((k+1,1)) 
-    w_init = w_init / numpy.linalg.norm(w_init)
-
-    if reward_init:
-        theta_init[:-1,-1] = numpy.hstack((m.R,0)) 
+    w_init = w_init / numpy.linalg.norm(w_init) 
 
     bb_params = [n + 1, k, beta_ratio]
-    bb_dict = dict( partition = partition, reg_tuple = reg, nonlin = nonlin,
+    bb_dict = dict( reg_tuple = reg, nonlin = nonlin,
         nonzero = nonzero, w = w_init, theta = theta_init)
-
 
     # initialize loss dictionary
     d_loss_data = {}
     for key in losses:
-        d_loss_data[key] = numpy.array([])     
+        d_loss_data[key] = numpy.array([])
     
-    
-    for tm in training_methods:
-        loss_list, wrt_list = tm
-        assert len(loss_list) == len(wrt_list)
-        
-        out_string = '%s.k=%i.reg=%s.lam=%s.gam=%s.b=%s.%s.%s%s%s.' % (
-            str(tm),
-            k,
-            str(reg),
-            lam, gam, beta, weighting, '+'.join(losses),
-            '.samples=%d' % n_samples if n_samples else '',
-            '.nonlin=%s' % nonlin if nonlin else '')
-        bb, d_loss_return = train_basis(bb_params, bb_dict, tm, m, d_loss_data, S, R, S_val, 
-                R_val, Mphi, Mrew, patience, max_iter, weighting, reward_init, out_string)
+    def yield_jobs():
+        for tm in training_methods:
+            loss_list, wrt_list = tm
+            assert len(loss_list) == len(wrt_list)
+            
+            out_string = '%s.k=%i.reg=%s.lam=%s.gam=%s.b=%s.%s.%s%s%s.' % (
+                str(tm),
+                k,
+                str(reg),
+                lam, gam, beta, weighting, '+'.join(losses),
+                '.samples=%d' % n_samples if n_samples else '',
+                '.nonlin=%s' % nonlin if nonlin else '')
+
+            yield (train_basis, [bb_params, bb_dict, tm, m, d_loss_data, X, R,  
+                X_val, R_val, X_test, R_test, Mphi, Mrew, patience, max_iter, 
+                weighting, out_string, min_imp, env_size])
+
+    # launch condor jobs
+    for (basis, d_loss_out) in condor.do(yield_jobs(), workers):
+        pass
+
 
     def output(prefix, suffix='pdf'):
         return '%s.k=%i.reg=%s.lam=%s.gam=%s.b=%s.%s.%s%s%s.%s' % (
@@ -161,15 +164,15 @@ def main(k = 16,
             '.nonlin=%s' % nonlin if nonlin else '',
             suffix)
 
-def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,  S_val, R_val, S_test, R_test, Mphi,
-            Mrew, patience, max_iter, weighting, rew_init, out_string):
+def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,  
+            S_val, R_val, S_test, R_test, Mphi, Mrew, patience, max_iter, 
+            weighting, out_string, min_imp, env_size):
 
     print 'training basis using training method: ', str(method)
     
     loss_list, wrt_list = method
     assert len(loss_list) == len(wrt_list)
     basis = BellmanBasis(*basis_params, **basis_dict)
-        
 
     for i,loss in enumerate(loss_list):
         basis.set_loss(loss, wrt_list[i])
@@ -199,7 +202,7 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,  S_val, R
                 
                 err = basis.loss(basis.flat_params, S_val, R_val, Mphi, Mrew)
 
-                if err < best_test_loss:
+                if (best_test_loss - err) / best_test_loss > min_imp:
                     best_test_loss = err
                     best_theta = copy.deepcopy(basis.theta)
                     waiting = 0
@@ -231,27 +234,35 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,  S_val, R
             print '\n user stopped current training loop'
 
         # save results!
-        with util.openz('learning_curve' + out_string + 'pickle.gz', "wb") as out_file:
+        with util.openz('sirf/output/pickle/learning_curve_results' + out_string + 'pickle.gz', "wb") as out_file:
             pickle.dump(d_loss, out_file, protocol = -1)
 
         # plot basis functions
         plot_features(basis.theta[:-1])
-        plt.savefig(output('basis'))
+        plt.savefig('sirf/output/plots/basis' + out_string+ '.pdf')
         
         # plot learning curves
-        plot_learning_curves(numpy.array([test_loss, test_be, true_be, true_lsq]), 
-                             ['test loss', 'test BE', 'true BE', 'true lsq'],
-                             ['r-','g-','b-','k-'])
-        plt.savefig(output('loss'))
+        plot_learning_curves(d_loss)
+        plt.savefig('sirf/output/plots/loss' + out_string + '.pdf')
         
         # plot value functions
-        plot_value_functions(env_size, m, bb)
-        plt.savefig(output('value'))
+        plot_value_functions(env_size, model, basis)
+        plt.savefig('sirf/output/plots/value' + out_string + '.pdf')
     
         basis.theta = best_theta
 
     return basis, d_loss
 
+def plot_learning_curves(d_loss, draw_styles = ['r-','g-','b-','k-']):
+    plt.clf()
+    ax = plt.axes()
+    for name, curve in d_loss.items():
+        x = range(len(curve))
+        ax.plot(x, curve / curve.mean(), label=name)
+        
+    plt.ylim(0, 3)
+    plt.title('Normalized Losses per CG Minibatch')
+    plt.legend(loc='upper right')
 
 def plot_value_functions(size, m, b):
     # plot value functions, true and approx
@@ -284,18 +295,8 @@ def plot_value_functions(size, m, b):
     print 'bellman error norm from v: ', numpy.linalg.norm(m.V - v_be)
     print 'lsq error norm from v: ', numpy.linalg.norm(m.V - v_lsq)
 
-def plot_learning_curves(losses, labels, draw_styles = ['r-','g-','b-','k-']):
-    plt.clf()
-    ax = plt.axes()
-    print losses, labels, draw_styles
-    for i, l in enumerate(losses):
-        x = range(len(l))
-        ax.plot(x, l / l.mean(), draw_styles[i], label=labels[i])
 
-    plt.ylim(0, 3)
-    plt.title('Normalized Losses per CG Minibatch')
-    plt.legend(loc='upper right')
 
 
 if __name__ == '__main__':
-    plac.call(main)
+    sirf.script(main)
