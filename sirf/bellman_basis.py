@@ -72,11 +72,11 @@ class BellmanBasis:
         bias = TS.sp_ones_like(self.S_t[:, 0:1])
         z = TS.hstack([self.S_t, bias], dtype='float64')
         z = g(TS.structured_dot(z, self.thetas_t[0]))
-        for t in enumerate(self.thetas_t[1:]):
+        for t in self.thetas_t[1:]:
             z = g(TT.dot(self.stack_bias(z), t))
-        self.PHI_full_t = TT.dot(z, self.w_t)
+        self.PHI_full_t = z
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
-        self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0], :]
+        self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0]]
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T
 
         self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + TS.square_diagonal(TT.ones((self.k, )) * self.shift)
@@ -174,10 +174,12 @@ class BellmanBasis:
     def bellman_funcs(self):
         ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
-        b = TT.dot(self.PHI0_t.T, self.Rlam_t)
-        a = TT.dot(self.PHI0_t.T, self.PHI0_t - self.PHIlam_t) + TS.square_diagonal(TT.ones((self.k, )) * self.shift)
+        p0 = TT.horizontal_stack(self.PHI0_t, TT.ones((self.PHI0_t.shape[0], 1)))
+        plam = TT.horizontal_stack(self.PHIlam_t, TT.ones((self.PHIlam_t.shape[0], 1)))
+        b = TT.dot(p0.T, self.Rlam_t)
+        a = TT.dot(p0.T, p0 - plam) + TT.eye(self.k + 1) * self.shift
         w_lstd = TT.dot(TL.matrix_inverse(a), b)
-        return TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.PHI0_t - self.PHIlam_t, w_lstd)))
+        return TT.sum(TT.sqr(self.Rlam_t - TT.dot(p0 - plam, w_lstd)))
 
     def layered_funcs(self):
         ''' uses self.w_t when measuring loss'''
@@ -227,7 +229,7 @@ class BellmanBasis:
         grad = numpy.zeros_like(vec)
         o = 0
         for i, (var, (a, b)) in enumerate(zip(self.param_names, self.shapes)):
-            sl = slice(o, o + a * b)
+            sl = slice(o, o + (a + 1) * b)
             if (var in self.wrt) or ('all' in self.wrt) or ('theta' in var and 'theta-all' in self.wrt):
                 grad[sl] += self.loss_grads[i](*args).flatten()
                 if self.reg_type is 'l1code':
@@ -239,7 +241,7 @@ class BellmanBasis:
                 if self.nonzero:
                     _, nz_grads = self.losses['nonzero']
                     grad[sl] += self.nonzero * nz_grads[i](*args).flatten()
-            o += a * b
+            o += (a + 1) * b
         return grad
 
     @staticmethod
@@ -276,10 +278,12 @@ class BellmanBasis:
         return m_phi, m_rew
 
     def encode(self, S):
-        z = numpy.hstack(S, numpy.ones((len(S), 1)))
+        def bias(z):
+            return numpy.hstack(z, numpy.ones((len(z), 1)))
+        z = bias(S)
         for t in self.thetas:
-            z = self.nonlin(numpy.dot(numpy.hstack(z, numpy.ones((len(z), 1))), t))
-        return numpy.dot(z, self.w)
+            z = self.nonlin(numpy.dot(bias(z), t))
+        return z
 
     def lstd_weights(self, S, R, lam, gam, eps, sampled = True):
         if sampled is False:
