@@ -279,9 +279,11 @@ class BellmanBasis:
 
     def encode(self, S):
         def bias(z):
-            return numpy.hstack(z, numpy.ones((len(z), 1)))
-        z = bias(S)
-        for t in self.thetas:
+            if len(z.shape) == 1:
+                z = z.reshape((1, len(z)))
+            return numpy.hstack([z, numpy.ones((len(z), 1))])
+        z = numpy.asarray(S)
+        for i, t in enumerate(self.thetas):
             z = self.nonlin(numpy.dot(bias(z), t))
         return z
 

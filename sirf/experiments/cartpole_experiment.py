@@ -17,17 +17,20 @@ def sample(n):
     states = []
     rewards = []
     w = sirf.CartPole()
+    episodes = 0
     while len(states) < n:
         # episodes are lists of [pstate, paction, reward, state, next_action]
         for state, _, reward, next_state, _ in w.single_episode():
-            states.append(state + [1])
+            episodes += 1
+            states.append(state)
             rewards.append([reward])
             if len(states) == n:
-                states.append(next_state + [1])
+                states.append(next_state)
                 break
     s = numpy.asarray(states)
     r = numpy.asarray(rewards)
-    logger.info('sampled %s states and %s rewards', s.shape, r.shape)
+    logger.info('sampled %s states and %s rewards from %d episodes',
+                s.shape, r.shape, episodes)
     return scipy.sparse.csc_matrix(s), scipy.sparse.csc_matrix(r)
 
 
@@ -85,7 +88,7 @@ def main(ks = 16,
     if l1code is not None:
         reg = ('l1-code', l1code)
 
-    bb = sirf.BellmanBasis(n + 1, [int(k) for k in re.findall(r'\d+', str(ks))],
+    bb = sirf.BellmanBasis(n, [int(k) for k in re.findall(r'\d+', str(ks))],
                            beta = beta / gam,
                            reg_tuple = reg,
                            nonlin = nonlin,
@@ -163,8 +166,8 @@ def main(ks = 16,
     trace()
 
     if output:
-        root = '%s-cartpole.k%d.g%.3f.l%.3f.n%d.%s.%s' % (
-            output, k, gam, lam, n_samples, '+'.join(loss_list.split()), nonlin or 'linear',
+        root = '%s-cartpole.k%s.g%.3f.l%.3f.n%d.%s.%s' % (
+            output, ks, gam, lam, n_samples, '+'.join(loss_list.split()), nonlin or 'linear',
             )
         logger.info('saving results to %s.pickle.gz' % root)
         with sirf.openz(root + '.pickle.gz', 'wb') as handle:
@@ -175,12 +178,12 @@ def main(ks = 16,
 
 def plot_features(root, bb):
     logger.info('computing feature responses')
-    probe = numpy.zeros((bb.thetas[-1].shape[0], 11, 11, 11, 11), float)
+    probe = numpy.zeros((bb.thetas[-1].shape[1], 11, 11, 11, 11), float)
     for i, x in enumerate(numpy.linspace(-2.4, 2.4, 11)):
         for j, dx in enumerate(numpy.linspace(-10, 10, 11)):
             for k, t in enumerate(numpy.linspace(-0.2094384, 0.2094384, 11)):
                 for l, dt in enumerate(numpy.linspace(-10, 10, 11)):
-                    probe[:, i, j, k, l] = bb.encode([x, dx, t, dt, 1])
+                    probe[:, i, j, k, l] = bb.encode([x, dx, t, dt])
 
     s = int(numpy.ceil(numpy.sqrt(len(probe))))
     for title, sum1, sum2 in (
