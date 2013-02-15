@@ -163,8 +163,8 @@ def main(k = 16,
                     waiting += 1
                     logger.info('iters without better %s loss: %s', bb.loss_type, waiting)
 
-                #if not it % 10:
-                #    trace()
+                if not it % 10:
+                    trace()
 
             bb.theta = best_theta - 1
         except KeyboardInterrupt:
