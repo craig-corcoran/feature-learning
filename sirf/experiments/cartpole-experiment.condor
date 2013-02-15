@@ -1,0 +1,55 @@
++Group = "GRAD"
++Project = "AI_ROBOTICS"
++ProjectDescription = "RL with experimental loss function"
+
+universe = vanilla
+notification = complete
+requirements = (InMastodon == false) && (Memory >= 1024) && (Arch == "X86_64")
+rank = KFlops
+getenv = True
+executable = ./cartpole-experiment.sh
+log = cartpole-experiment.log
+
+# change this as needed to point to the source directory containing the shell script.
+initialdir = /u/leif/src/feature-learning/sirf/experiments
+
+# queue up different experiments.
+arguments = -n-samples 32 -method 0 -output cartpole/test-$(Process)
+output = cartpole/experiment-32-0.$(Process).out
+error = cartpole/experiment-32-0.$(Process).err
+Queue 10
+
+arguments = -n-samples 64 -method 0 -output cartpole/test-$(Process)
+output = cartpole/experiment-64-0.$(Process).out
+error = cartpole/experiment-64-0.$(Process).err
+Queue 10
+
+arguments = -n-samples 128 -method 0 -output cartpole/test-$(Process)
+output = cartpole/experiment-128-0.$(Process).out
+error = cartpole/experiment-128-0.$(Process).err
+Queue 10
+
+arguments = -n-samples 256 -method 0 -output cartpole/test-$(Process)
+output = cartpole/experiment-256-0.$(Process).out
+error = cartpole/experiment-256-0.$(Process).err
+Queue 10
+
+arguments = -n-samples 512 -method 0 -output cartpole/test-$(Process)
+output = cartpole/experiment-512-0.$(Process).out
+error = cartpole/experiment-512-0.$(Process).err
+Queue 10
+
+arguments = -n-samples 1024 -method 0 -output cartpole/test-$(Process)
+output = cartpole/experiment-1024-0.$(Process).out
+error = cartpole/experiment-1024-0.$(Process).err
+Queue 10
+
+arguments = -n-samples 2048 -method 0 -output cartpole/test-$(Process)
+output = cartpole/experiment-2048-0.$(Process).out
+error = cartpole/experiment-2048-0.$(Process).err
+Queue 10
+
+arguments = -n-samples 4096 -method 0 -output cartpole/test-$(Process)
+output = cartpole/experiment-4096-0.$(Process).out
+error = cartpole/experiment-4096-0.$(Process).err
+Queue 10

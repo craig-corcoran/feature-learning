@@ -100,6 +100,8 @@ def main(k = 16,
         R_val = R_test = R
         losses = ['true-bellman', 'true-model', 'true-reward', 'true-lsq']
 
+    reward_init = False if n_samples else True
+
     # build bellman operator matrices
     print 'making mixing matrices'
     Mphi, Mrew = BellmanBasis.get_mixing_matrices(n_samples or n, lam, gam, sampled = bool(n_samples), eps = eps)
@@ -111,7 +113,6 @@ def main(k = 16,
     if l1code is not None:
         reg = ('l1-code', l1code)
 
-    bb = BellmanBasis(n + 1, k, beta_ratio, partition = partition, reg_tuple = reg, nonlin = nonlin, nonzero = nonzero)
     
     # initialize features with unit norm
     theta_init = numpy.random.standard_normal((n+1, k))
@@ -123,7 +124,13 @@ def main(k = 16,
     w_init = numpy.random.standard_normal((k+1,1)) 
     w_init = w_init / numpy.linalg.norm(w_init)
 
-    bb.theta[:,-1] = numpy.hstack([m.R, [0]]) # initialize the last column as the reward function
+    if reward_init:
+        theta_init[:-1,-1] = numpy.hstack((m.R,0)) 
+
+    bb_params = [n + 1, k, beta_ratio]
+    bb_dict = dict( partition = partition, reg_tuple = reg, nonlin = nonlin,
+        nonzero = nonzero, w = w_init, theta = theta_init)
+
 
     # initialize loss dictionary
     d_loss_data = {}
@@ -134,115 +141,116 @@ def main(k = 16,
     for tm in training_methods:
         loss_list, wrt_list = tm
         assert len(loss_list) == len(wrt_list)
-
-        for i, loss in enumerate(loss_list):
-            bb.set_loss(loss, wrt_list[i])
-            bb = train_basis(bb, S, R, S_val, R_val, Mphi, Mrew, patience, 
-                        max_iter, weighting)
-
-
-
-    for lt, wrt in zip(loss_types.split(), itertools.cycle(grad_vars.split())):
-        try:
-            print 'training with %s loss with respect to %s vars' % (lt,wrt)
-            bb.set_loss(loss_type=lt, wrt=wrt)
-            bb.set_regularizer(reg)
-            
-            theta_old = copy.deepcopy(bb.theta)
-            bb, tel, teb, trb, trq = train_basis(bb, m, X, R, X_test, R_test, 
-                        Mphi, Mrew, patience, max_iter, weighting)
-
-            delta = numpy.linalg.norm(bb.theta - theta_old)
-            print 'delta: ', delta
-            
-            test_loss = numpy.append(test_loss, tel)
-            test_be = numpy.append(test_be, teb)
-            true_be = numpy.append(true_be, trb)
-            true_lsq = numpy.append(true_lsq, trq)
-
-        except KeyboardInterrupt:
-            print '\n user stopped current training loop'
+        
+        out_string = '%s.k=%i.reg=%s.lam=%s.gam=%s.b=%s.%s.%s%s%s.' % (
+            str(tm),
+            k,
+            str(reg),
+            lam, gam, beta, weighting, '+'.join(losses),
+            '.samples=%d' % n_samples if n_samples else '',
+            '.nonlin=%s' % nonlin if nonlin else '')
+        bb, d_loss_return = train_basis(bb_params, bb_dict, tm, m, d_loss_data, S, R, S_val, 
+                R_val, Mphi, Mrew, patience, max_iter, weighting, reward_init, out_string)
 
     def output(prefix, suffix='pdf'):
         return '%s.k=%i.reg=%s.lam=%s.gam=%s.b=%s.%s.%s%s%s.%s' % (
             prefix, k,
             str(reg),
-            lam, gam, beta, weighting, '+'.join(loss_types.split()),
+            lam, gam, beta, weighting, '+'.join(losses),
             '.samples=%d' % n_samples if n_samples else '',
             '.nonlin=%s' % nonlin if nonlin else '',
             suffix)
 
-    # save results!
-    with util.openz(output('covariance_results', 'pickle.gz'), "wb") as out_file:
-        pickle.dump((test_loss, test_be, true_be, true_lsq), out_file, protocol = -1)
+def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,  S_val, R_val, S_test, R_test, Mphi,
+            Mrew, patience, max_iter, weighting, rew_init, out_string):
 
-    # plot basis functions
-    plot_features(bb.theta[:-1])
-    plt.savefig(output('basis'))
+    print 'training basis using training method: ', str(method)
     
-    # plot learning curves
-    plot_learning_curves(numpy.array([test_loss, test_be, true_be, true_lsq]), 
-                         ['test loss', 'test BE', 'true BE', 'true lsq'],
-                         ['r-','g-','b-','k-'])
-    plt.savefig(output('loss'))
+    loss_list, wrt_list = method
+    assert len(loss_list) == len(wrt_list)
+    basis = BellmanBasis(*basis_params, **basis_dict)
+        
+
+    for i,loss in enumerate(loss_list):
+        basis.set_loss(loss, wrt_list[i])
     
-    # plot value functions
-    plot_value_functions(env_size, m, bb)
-    plt.savefig(output('value'))
+        it = 0
+        waiting = 0
+        best_theta = None
+        best_test_loss = numpy.inf
+        try:
+            while (waiting < patience):
+                it += 1
+                print '*** iteration', it, '***'
+                old_theta = copy.deepcopy(basis.theta)
+                basis.set_params( scipy.optimize.fmin_cg(basis.loss, basis.flat_params, basis.grad,
+                                  args = (S, R, Mphi, Mrew),
+                                  full_output = False,
+                                  maxiter = max_iter, 
+                                  gtol = 1e-8,
+                                  ) )
+                delta = numpy.linalg.norm(old_theta-basis.theta)
+                print 'delta theta: ', delta
 
-def train_basis(basis, model, S, R, S_test, R_test, Mphi, Mrew, patience, 
-                    max_iter, weighting):
-    
-    test_loss = numpy.append(numpy.array([]), basis.loss(basis.flat_params, S, R, Mphi, Mrew))
-    test_be = numpy.append(numpy.array([]), basis.loss_be(basis.theta, basis.w, S, R, Mphi, Mrew))
-    true_be = numpy.append(numpy.array([]), model.bellman_error(basis.theta[:-1], weighting = weighting))
-    true_lsq = numpy.append(numpy.array([]), model.value_error(basis.theta[:-1], weighting = weighting))
+                norms = numpy.apply_along_axis(numpy.linalg.norm, 0, basis.theta)
+                print 'column norms: %.2f min / %.2f avg / %.2f max' % (
+                    norms.min(), norms.mean(), norms.max())
+                #basis.theta = numpy.apply_along_axis(lambda v: v/numpy.linalg.norm(v), 0, basis.theta)
+                
+                err = basis.loss(basis.flat_params, S_val, R_val, Mphi, Mrew)
 
-    it = 0
-    n_test_inc = 0
-    best_theta = None
-    best_test_loss = numpy.inf
-    try:
-        while (n_test_inc < patience):
-            it += 1
-            print '*** iteration', it, '***'
-            old_theta = copy.deepcopy(basis.theta)
-            basis.set_params( scipy.optimize.fmin_cg(basis.loss, basis.flat_params, basis.grad,
-                              args = (S, R, Mphi, Mrew),
-                              full_output = False,
-                              maxiter = max_iter, 
-                              gtol = 1e-8,
-                              ) )
-            delta = numpy.linalg.norm(old_theta-basis.theta)
-            print 'delta theta: ', delta
+                if err < best_test_loss:
+                    best_test_loss = err
+                    best_theta = copy.deepcopy(basis.theta)
+                    waiting = 0
+                    print 'new best %s loss: ' % basis.loss_type, best_test_loss
+                else:
+                    waiting += 1
+                    print 'iters without better %s loss: ' % basis.loss_type, waiting
 
-            norms = numpy.apply_along_axis(numpy.linalg.norm, 0, basis.theta)
-            print 'column norms: %.2f min / %.2f avg / %.2f max' % (
-                norms.min(), norms.mean(), norms.max())
-            #basis.theta = numpy.apply_along_axis(lambda v: v/numpy.linalg.norm(v), 0, basis.theta)
-            
-            err = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew)
-            test_loss = numpy.append(test_loss, err)
-            test_be = numpy.append(test_be, basis.loss_be(basis.theta, basis.w, S, R, Mphi, Mrew))
-            true_be = numpy.append(true_be, model.bellman_error(basis.theta[:-1], weighting = weighting))
-            true_lsq = numpy.append(true_lsq, model.value_error(basis.theta[:-1], weighting = weighting))
-            
-            if err < best_test_loss:
-                best_test_loss = err
-                best_theta = copy.deepcopy(basis.theta)
-                n_test_inc = 0
-                print 'new best %s loss: ' % basis.loss_type, best_test_loss
-            else:
-                n_test_inc += 1
-                print 'iters without better %s loss: ' % basis.loss_type, n_test_inc
+                # record losses with test set
+                for loss, arr in d_loss.items():
+                    if loss == 'test-training':
+                        val = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew)
+                    elif loss == 'test-bellman':
+                        val = basis.loss_be(basis.theta, basis.w, S_val, R_val, Mphi, Mrew)
+                    elif loss == 'test-reward':
+                        val = basis.loss_r(basis.theta, basis.w, S_val, R_val, Mphi, Mrew)
+                    elif loss == 'test-model':
+                        val = basis.loss_r(basis.theta, basis.w, S_val, R_val, Mphi, Mrew)
+                    elif loss == 'true-bellman':
+                        val = model.bellman_error(basis.theta[:-1], weighting = weighting)
+                    elif loss == 'true-reward':
+                        val = model.reward_error(basis.theta[:-1], weighting = weighting)
+                    elif loss == 'true-model':
+                        val = model.model_error(basis.theta[:-1], weighting = weighting)
 
-    except KeyboardInterrupt:
+                arr = numpy.append(arr, val)
+
+        except KeyboardInterrupt:
             print '\n user stopped current training loop'
+
+        # save results!
+        with util.openz('learning_curve' + out_string + 'pickle.gz', "wb") as out_file:
+            pickle.dump(d_loss, out_file, protocol = -1)
+
+        # plot basis functions
+        plot_features(basis.theta[:-1])
+        plt.savefig(output('basis'))
+        
+        # plot learning curves
+        plot_learning_curves(numpy.array([test_loss, test_be, true_be, true_lsq]), 
+                             ['test loss', 'test BE', 'true BE', 'true lsq'],
+                             ['r-','g-','b-','k-'])
+        plt.savefig(output('loss'))
+        
+        # plot value functions
+        plot_value_functions(env_size, m, bb)
+        plt.savefig(output('value'))
     
-    basis.theta = best_theta
+        basis.theta = best_theta
 
-    return basis, test_loss, test_be, true_be, true_lsq
-
+    return basis, d_loss
 
 
 def plot_value_functions(size, m, b):
@@ -288,59 +296,6 @@ def plot_learning_curves(losses, labels, draw_styles = ['r-','g-','b-','k-']):
     plt.title('Normalized Losses per CG Minibatch')
     plt.legend(loc='upper right')
 
-
-def train_basis(basis, model, S, R, S_test, R_test, Mphi, Mrew, patience, 
-                    max_iter, weighting):
-    
-    test_loss = numpy.append(numpy.array([]), basis.loss(basis.flat_params, S, R, Mphi, Mrew))
-    test_be = numpy.append(numpy.array([]), basis.loss_be(basis.theta, basis.w, S, R, Mphi, Mrew))
-    true_be = numpy.append(numpy.array([]), model.bellman_error(basis.theta[:-1], weighting = weighting))
-    true_lsq = numpy.append(numpy.array([]), model.value_error(basis.theta[:-1], weighting = weighting))
-
-    it = 0
-    n_test_inc = 0
-    best_theta = None
-    best_test_loss = numpy.inf
-    try:
-        while (n_test_inc < patience):
-            it += 1
-            print '*** iteration', it, '***'
-            old_theta = copy.deepcopy(basis.theta)
-            basis.set_params( scipy.optimize.fmin_cg(basis.loss, basis.flat_params, basis.grad,
-                              args = (S, R, Mphi, Mrew),
-                              full_output = False,
-                              maxiter = max_iter, 
-                              gtol = 1e-8,
-                              ) )
-            delta = numpy.linalg.norm(old_theta-basis.theta)
-            print 'delta theta: ', delta
-
-            norms = numpy.apply_along_axis(numpy.linalg.norm, 0, basis.theta)
-            print 'column norms: %.2f min / %.2f avg / %.2f max' % (
-                norms.min(), norms.mean(), norms.max())
-            #basis.theta = numpy.apply_along_axis(lambda v: v/numpy.linalg.norm(v), 0, basis.theta)
-            
-            err = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew)
-            test_loss = numpy.append(test_loss, err)
-            test_be = numpy.append(test_be, basis.loss_be(basis.theta, basis.w, S, R, Mphi, Mrew))
-            true_be = numpy.append(true_be, model.bellman_error(basis.theta[:-1], weighting = weighting))
-            true_lsq = numpy.append(true_lsq, model.value_error(basis.theta[:-1], weighting = weighting))
-            
-            if err < best_test_loss:
-                best_test_loss = err
-                best_theta = copy.deepcopy(basis.theta)
-                n_test_inc = 0
-                print 'new best %s loss: ' % basis.loss_type, best_test_loss
-            else:
-                n_test_inc += 1
-                print 'iters without better %s loss: ' % basis.loss_type, n_test_inc
-
-    except KeyboardInterrupt:
-            print '\n user stopped current training loop'
-    
-    basis.theta = best_theta
-
-    return basis, test_loss, test_be, true_be, true_lsq
 
 if __name__ == '__main__':
     plac.call(main)
