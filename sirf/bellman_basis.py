@@ -17,7 +17,7 @@ class BellmanBasis:
 
     LOSSES = 'bellman layered model reward covariance prediction nonzero l1code l1theta'.split()
 
-    def __init__(self, n, ks, beta, theta = None, w = None, reg_tuple = None,
+    def __init__(self, n, ks, beta, thetas = None, w = None, reg_tuple = None,
                  nonlin = None, nonzero = None, shift = 1e-6):
 
         logger.info('building bellman basis')
@@ -27,25 +27,29 @@ class BellmanBasis:
         self.nonzero = nonzero  # set this to some positive float to penalize zero theta vectors.
         self.shift = shift # prevent singular matrix inversion with this pseudoinverse scalar.
 
-        if theta is None:
+        # params is a list of all learnable parameters in the model -- first the thetas, then w.
+        params = []
+        if thetas is None:
             thetas = [numpy.random.randn(a, b) for a, b in self.shapes]
             for theta in thetas:
                 theta /= numpy.sqrt((theta * theta).sum(axis=0))
         else:
+            # TODO: this no longer works for multiple layers.
             assert theta.shape == (k * n, ) or theta.shape == (self.n, self.k)
+        params.extend(thetas)
 
         if w is None:
-            w = numpy.random.randn(self.ks[-1] + 1, 1)
+            w = numpy.random.randn(self.k + 1, 1)
             w = w / numpy.linalg.norm(w)
         else:
-            assert w.shape == (self.ks[-1] + 1, ) or w.shape == (self.ks[-1] + 1, 1)
-        thetas.append(w)
+            assert w.shape == (self.k + 1, ) or w.shape == (self.k + 1, 1)
+        params.append(w)
 
-        self.set_params(thetas = thetas)
+        self.set_params(params = params)
 
         # primitive theano vars
-        self.thetas_t = [TT.dmatrix('theta-%d' % i) for i in range(len(thetas[:-1]))] + [TT.dmatrix('w')]
-        self.var_names = ['theta-%d' % i for i in range(len(thetas[:-1]))] + ['w']
+        self.param_names = ['theta-%d' % i for i in range(len(thetas))] + ['w']
+        self.params_t = [TT.dmatrix(n) for n in self.param_names]
 
         self.S_t = TS.csr_matrix('S')
         self.Rfull_t = TS.csr_matrix('R')
@@ -65,23 +69,25 @@ class BellmanBasis:
 
         # encode s and mix lambda components
         z = self.S_t
-        for t in self.thetas_t:
-            z = g(TS.structured_dot(z, t))
-        self.PHI_full_t = z
+        for i, t in enumerate(self.thetas_t):
+            g(TS.structured_dot(z, t)) if i == 0 else g(TT.dot(z, t))
+        self.PHI_full_t = TT.dot(z, self.w_t)
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
         self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0], :]
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T
 
-        self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + TS.square_diagonal(TT.ones((k,)) * self.shift)
+        self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + TS.square_diagonal(TT.ones((self.k, )) * self.shift)
         self.cov_inv = TL.matrix_inverse(self.cov) # l2 reg to avoid sing matrix
-
-        logger.info('compiling theano losses')
 
         # precompile theano functions and gradients.
         self.losses = dict(zip(self.LOSSES, [self.compile_loss(lo) for lo in self.LOSSES]))
 
         self.set_loss('bellman', ['theta-all'])
         self.set_regularizer(reg_tuple)
+
+    @property
+    def k(self):
+        return self.ks[-1]
 
     @property
     def shapes(self):
@@ -101,23 +107,33 @@ class BellmanBasis:
 
     @property
     def w(self):
-        return self.thetas[-1]
+        return self.params[-1]
 
     @property
     def w_t(self):
-        return self.thetas_t[-1]
+        return self.params_t[-1]
+
+    @property
+    def thetas(self):
+        return self.params[:-1]
+
+    @property
+    def thetas_t(self):
+        return self.params_t[:-1]
 
     @property
     def theano_vars(self):
-        return self.thetas_t + [self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t]
+        return self.params_t + [self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t]
 
     def compile_loss(self, loss):
         kw = dict(on_unused_input='ignore')
         loss_t = getattr(self, '%s_funcs' % loss)()
+
+        logger.info('compiling %s loss', loss)
         loss = theano.function(self.theano_vars, loss_t, **kw)
 
         grad_list = []
-        for var in self.thetas_t:
+        for var in self.params_t:
             try: # theano doesn't like it when you take the gradient of wrt an irrelevant var
                 grad_list.append(theano.function(self.theano_vars, theano.grad(loss_t, var), **kw))
             except ValueError: # function not differentiable wrt var, just return zeros
@@ -141,12 +157,12 @@ class BellmanBasis:
 
     def l1theta_funcs(self):
         '''Minimize the size of the feature weights.'''
-        return TT.sum(TT.abs_(t) for t in self.thetas_t)
+        return sum(TT.sum(TT.abs_(t)) for t in self.params_t)
 
     def nonzero_funcs(self):
         '''Try to make sure feature weights are nonzero.'''
         l = lambda t: (1. / ((t * t).sum(axis=0) + 1e-10)).sum()
-        return sum(l(t) for t in self.thetas_t)
+        return sum(l(t) for t in self.params_t)
 
     def bellman_funcs(self):
         ''' uses matrix inverse to solve for w'''
@@ -185,8 +201,8 @@ class BellmanBasis:
         return TT.sum(TT.sqr(A)) # frobenius norm
 
     def loss(self, vec, S, R, Mphi, Mrew):
-        thetas = self._unpack_params(vec)
-        args = thetas + [S, R, Mphi, Mrew]
+        params = self._unpack_params(vec)
+        args = params + [S, R, Mphi, Mrew]
         loss =  self.loss_func(*args)
         #print 'loss pre reg: ', loss
         if self.reg_type is 'l1code':
@@ -201,10 +217,9 @@ class BellmanBasis:
         return loss / S.shape[0]
 
     def grad(self, vec, S, R, Mphi, Mrew):
-        thetas = self._unpack_params(vec)
-        args = thetas + [S, R, Mphi, Mrew]
-        grad = numpy.zeros_like(vec)
-        def add(i):
+        args = self._unpack_params(vec) + [S, R, Mphi, Mrew]
+        gradient = numpy.zeros_like(vec)
+        def add(grad, i):
             grad += self.loss_grads[i](*args)
             if self.reg_type is 'l1code':
                 _, l1_grads = self.losses['l1code']
@@ -216,20 +231,16 @@ class BellmanBasis:
                 _, nz_grads = self.losses['nonzero']
                 grad += self.nonzero * nz_grads[i](*args)
         for v in self.wrt:
-            if v == 'theta-all':
-                for i in range(len(self.var_names[:-1])):
-                    add(i)
-                continue
-            if v == 'all':
-                for i in range(len(self.var_names)):
-                    add(i)
-                continue
-            i = self.var_names.index(v)
-            if 0 <= i:
-                add(i)
+            if 'all' in v:
+                n = len(self.param_names)
+                for i in range(n)[:n if v is 'all' else n - 1]:
+                    add(gradient, i)
             else:
-                logger.error('unknown variable name %r', v)
-        return grad
+                try:
+                    add(gradient, self.param_names.index(v))
+                except ValueError:
+                    logger.error('unknown variable name %r', v)
+        return gradient
 
     @staticmethod
     def _calc_n_steps(lam, gam, eps):
@@ -268,7 +279,7 @@ class BellmanBasis:
         z = S
         for t in self.thetas:
             z = self.nonlin(numpy.dot(z, t))
-        return z
+        return numpy.dot(z, self.w)
 
     def lstd_weights(self, S, R, lam, gam, eps, sampled = True):
         if sampled is False:
@@ -292,24 +303,27 @@ class BellmanBasis:
 
         return numpy.linalg.solve(a, b) if a.ndim > 0 else b / a
 
-    def set_params(self, vec = None, thetas = None):
+    def set_params(self, vec = None, params = None):
         if vec is not None:
-            self.thetas = self._unpack_params(vec)
-        if thetas is not None:
-            self.thetas = [t.reshape(s) for s, t in zip(self.shapes, thetas)]
+            self.params = self._unpack_params(vec)
+        if params is not None:
+            self.params = [p.reshape(s) for s, p in zip(self.shapes, params)]
 
     def _unpack_params(self, vec):
         i = 0
-        thetas = []
+        params = []
         for a, b in self.shapes:
             j = i + a * b
-            thetas.append(vec[i:j].reshape((a, b)))
+            params.append(vec[i:j].reshape((a, b)))
             i = j
-        return thetas
+        return params
 
     @property
     def flat_params(self):
-        return numpy.append(*tuple(t.flatten() for t in self.thetas))
+        z = numpy.array([])
+        for p in self.params:
+            z = numpy.append(z, p.flatten())
+        return z
 
 
 def plot_features(phi, r = None, c = None):
