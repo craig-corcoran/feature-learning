@@ -26,7 +26,7 @@ class BellmanBasis:
 
     def __init__(self, n, k, beta, 
                 loss_type = 'bellman', theta = None, w = None,
-                reg_tuple = None, partition = None, wrt = ['theta-all','w'],
+                reg_tuple = None, partition = None, wrt = ['theta-all', 'w'],
                 nonlin = None, nonzero = None, 
                 record_loss = None, shift = 1e-6):
 
@@ -73,9 +73,18 @@ class BellmanBasis:
         self.Mrew_t = TT.dmatrix('Mrew') # mixing matrix for reward_lambda
         self.beta_t = theano.shared(beta) # multiplier on gamma set by env xxx
 
+        # pick out a numpy and corresponding theano nonlinearity
+        relu_t = lambda z: TT.maximum(0, z)
+        sigmoid_t = TT.nnet.sigmoid
+        relu = lambda z: numpy.clip(z, 0, numpy.inf)
+        sigmoid = lambda z: 1. / (1 + numpy.exp(z))
+        ident = lambda z: z
+        g, self.nonlin = dict(
+            sigmoid=(sigmoid_t, sigmoid),
+            relu=(relu_t, relu)).get(nonlin, (ident, ident))
+
         # encode s and mix lambda components
-        d_nonlin = dict(sigmoid=TT.nnet.sigmoid, relu=lambda z: TT.maximum(0, z))
-        self.PHI_full_t = d_nonlin.get(nonlin, lambda z: z)(TS.structured_dot(self.S_t, self.theta_t))
+        self.PHI_full_t = g(TS.structured_dot(self.S_t, self.theta_t))
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
         self.PHI0_t = self.PHI_full_t[0:self.PHIlam_t.shape[0],:]
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T 
@@ -141,7 +150,7 @@ class BellmanBasis:
         given in the partition tuple. ex: partition = {'reward':1, 'model':k-1} 
         '''
         
-        print 'partitioning theta: ', partition.keys()
+        logger.info('partitioning theta: %s', partition.keys())
         names = partition.keys()
         indices = partition.values()
 
@@ -216,8 +225,9 @@ class BellmanBasis:
         return TT.sum(TT.abs_(A))
 
     def prediction_funcs(self):
-        # next-step feature loss: || PHI0 PHI0.T PHIlam - PHIlam ||
-        A = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, self.PHIlam_t)) - self.PHIlam_t
+        # next-step feature loss: || PHI0 PHI0.T Z - Z || where Z = [ R | PHIlam ]
+        Z = TT.horizontal_stack(self.Rlam_t, self.PHIlam_t)
+        A = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, Z)) - Z
         return TT.sqrt(TT.sum(TT.sqr(A))) # frobenius norm
 
     def loss(self, vec, S, R, Mphi, Mrew):
@@ -233,10 +243,9 @@ class BellmanBasis:
         if self.nonzero:
             nz_loss, _ = self.losses['nonzero']
             loss += self.nonzero * nz_loss(theta, w, S, R, Mphi, Mrew)
-        return loss #/ (S.shape[0] * self.n) # norm loss by num samples and dim of data
+        return loss / S.shape[0]
         
     def grad(self, vec, S, R, Mphi, Mrew):
-        
         theta, w = self._unpack_params(vec)
         
         th_grad = numpy.zeros_like(self.theta)
@@ -309,7 +318,7 @@ class BellmanBasis:
         return m_phi, m_rew
 
     def encode(self, S):
-        return numpy.dot(S, self.theta) # TODO add nonlin here
+        return self.nonlin(numpy.dot(S, self.theta))
 
     def lstd_weights(self, S, R, lam, gam, eps, sampled = True):
 
@@ -375,7 +384,7 @@ def plot_features(phi, r = None, c = None):
     n = int(numpy.ceil(k/float(m)))
     assert m*n >= k 
     
-    print 'n: ', n
+    logger.info('plotting features, n: %d', n)
     F = None
     for i in xrange(m):
         
