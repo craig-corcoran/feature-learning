@@ -49,7 +49,7 @@ def main(k = 16,
          state_rep = 'tabular',
          n_samples = None,
          loss_types = 'covariance bellman',
-         grad_vars = 'model',
+         grad_vars = 'theta-all',
          nonlin = None,
          nonzero = None,
          ):
@@ -57,7 +57,7 @@ def main(k = 16,
     beta_ratio = beta/gam 
 
     if partition is None:
-        partition = {'reward':1, 'model':k-1}        
+        partition = {'theta-model':k-1, 'theta-reward':1}
 
     print 'building environment'
     mdp = grid_world.MDP(walls_on = True, size = env_size)
@@ -72,7 +72,7 @@ def main(k = 16,
     if l1code is not None:
         reg = ('l1-code', l1code)
     bb = Basis(n + 1, k, beta_ratio, partition = partition, reg_tuple = reg, nonlin = nonlin, nonzero = nonzero)
-    bb.theta[:,-1] = numpy.hstack([m.R, [0]]) # initialize the last column as the reward function
+    bb.theta[:, -1] = numpy.hstack([m.R, [0]]) # initialize the last column as the reward function
 
     if n_samples:
         kw = dict(n_samples = n_samples, state_rep = state_rep, distribution = weighting)
@@ -104,7 +104,7 @@ def main(k = 16,
     for lt, wrt in zip(loss_types.split(), itertools.cycle(grad_vars.split())):
         try:
             print 'training with %s loss with respect to %s vars' % (lt,wrt)
-            bb.set_loss(loss_type=lt, wrt=wrt)
+            bb.set_loss(loss_type=lt, wrt=[wrt])
             bb.set_regularizer(reg)
             
             theta_old = copy.deepcopy(bb.theta)
@@ -219,6 +219,9 @@ def train_basis(basis, model, S, R, S_test, R_test, Mphi, Mrew, patience,
                               ) )
             delta = numpy.linalg.norm(old_theta-basis.theta)
             print 'delta theta: ', delta
+            if delta < 1e-5:
+                print 'delta theta too small, stopping'
+                break
 
             norms = numpy.apply_along_axis(numpy.linalg.norm, 0, basis.theta)
             print 'column norms: %.2f min / %.2f avg / %.2f max' % (
