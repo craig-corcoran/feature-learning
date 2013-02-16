@@ -131,6 +131,8 @@ def main(ks = 16,
         best_params = None
         waiting = 0
 
+        trace()
+
         try:
             it = 0
             while waiting < patience:
@@ -156,7 +158,7 @@ def main(ks = 16,
                     waiting += 1
                     logger.info('iters without better %s loss: %s', bb.loss_type, waiting)
 
-                if not it % 10:
+                if not it % 3:
                     trace()
 
             bb.params = best_params
@@ -179,10 +181,10 @@ def main(ks = 16,
 def plot_features(root, bb):
     logger.info('computing feature responses')
     probe = numpy.zeros((bb.thetas[-1].shape[1], 11, 11, 11, 11), float)
-    for i, x in enumerate(numpy.linspace(-2.4, 2.4, 11)):
-        for j, dx in enumerate(numpy.linspace(-10, 10, 11)):
-            for k, t in enumerate(numpy.linspace(-0.2094384, 0.2094384, 11)):
-                for l, dt in enumerate(numpy.linspace(-10, 10, 11)):
+    for i, x in enumerate(numpy.linspace(-3, 3, 11)):
+        for j, dx in enumerate(numpy.linspace(-15, 15, 11)):
+            for k, t in enumerate(numpy.linspace(-0.3, 0.3, 11)):
+                for l, dt in enumerate(numpy.linspace(-15, 15, 11)):
                     probe[:, i, j, k, l] = bb.encode([x, dx, t, dt])
 
     s = int(numpy.ceil(numpy.sqrt(len(probe))))
