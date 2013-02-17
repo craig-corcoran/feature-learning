@@ -2,22 +2,25 @@ import copy
 import grid_world
 import numpy
 from scipy.optimize import fmin_cg
-from dbel import Model
-from bellman_basis import plot_features, SIBasis
+from rl import Model
+from bellman_basis import plot_features
 import matplotlib.pyplot as plt
 
-def main():
+def main(gam = 0.):
     mdp = grid_world.MDP(walls_on = True)    
     #mdp.policy = OptimalPolicy(mdp.env, m)
     m = Model(mdp.env.R, mdp.env.P) 
-
-    w,v = numpy.linalg.eig(m.P)
-    v = v[:, numpy.argsort(w)]
     
+    #beta = 1./gam
+    w,v = numpy.linalg.eig( m.P )#- beta * numpy.eye(m.P.shape[0]))
+    v = v[:, numpy.argsort(abs(w))]
+    
+
     plot_features(numpy.real(v))
+    plt.savefig('eigvecI-beta=%sP.pdf' % str('inf'))
     plt.show()
-    plot_features(numpy.imag(v))
-    plt.show()
+    #plot_features(numpy.imag(v))
+    #plt.show()
 
 def simultaneous_iteration(k = 16, eps = 1e-8, lr = 1e-3):
     mdp = grid_world.MDP(walls_on = True)    
@@ -228,6 +231,6 @@ def test_si_basis(n = 81, k = 16, patience = 1, gam = 1-1e-4,
 
 if __name__ == '__main__':
     #simultaneous_iteration()
-    test_si_basis()
-
+    #test_si_basis()
+    main()
     
