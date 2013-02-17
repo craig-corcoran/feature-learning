@@ -124,9 +124,9 @@ def main(k = 16,
     w_init = numpy.random.standard_normal((k+1,1)) 
     w_init = w_init / numpy.linalg.norm(w_init) 
 
-    bb_params = [n + 1, k, beta_ratio]
+    bb_params = [n + 1, [k], beta_ratio]
     bb_dict = dict( reg_tuple = reg, nonlin = nonlin,
-        nonzero = nonzero, w = w_init, theta = theta_init)
+        nonzero = nonzero, w = w_init, thetas = [theta_init])
 
     # initialize loss dictionary
     d_loss_data = {}
@@ -228,7 +228,7 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,
                     elif loss == 'true-model':
                         val = model.model_error(basis.theta[:-1], weighting = weighting)
 
-                arr = numpy.append(arr, val)
+                    arr = numpy.append(arr, val)
 
         except KeyboardInterrupt:
             print '\n user stopped current training loop'

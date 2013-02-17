@@ -33,9 +33,7 @@ class BellmanBasis:
             thetas = [numpy.random.randn(a, b) for a, b in self.shapes]
             for theta in thetas:
                 theta /= numpy.sqrt((theta * theta).sum(axis=0))
-        else:
-            # TODO: this no longer works for multiple layers.
-            assert theta.shape == (k * n, ) or theta.shape == (self.n, self.k)
+
         params.extend(thetas)
 
         if w is None:
@@ -70,7 +68,7 @@ class BellmanBasis:
         # encode s and mix lambda components
         z = self.S_t
         for i, t in enumerate(self.thetas_t):
-            g(TS.structured_dot(z, t)) if i == 0 else g(TT.dot(z, t))
+            z = g(TS.structured_dot(z, t)) if i == 0 else g(TT.dot(z, t))
         self.PHI_full_t = TT.dot(z, self.w_t)
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
         self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0], :]
