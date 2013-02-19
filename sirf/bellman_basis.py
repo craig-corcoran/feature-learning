@@ -72,16 +72,14 @@ class BellmanBasis:
             relu=(relu_t, relu)).get(nonlin, (ident, ident))
 
         # encode s and mix lambda components
-        bias = TS.sp_ones_like(self.S_t[:, 0:1])
-        z = TS.hstack([self.S_t, bias], dtype='float64')
-        z = g(TS.structured_dot(z, self.thetas_t[0]))
+        z = g(TS.structured_dot(self.S_t, self.thetas_t[0]))
         for t in self.thetas_t[1:]:
             z = g(TT.dot(self.stack_bias(z), t))
         self.PHI_full_t = z
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
         self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0],:]
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T
-        self.Z_t = TT.horizontal_stack(self.Rlam_t, self.PHIlam_t)
+        self.Z_t = TT.concatenate([self.Rlam_t, self.PHIlam_t], axis=1)
 
         self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + TS.square_diagonal(TT.ones((self.k, )) * self.shift)
         self.cov_inv = TL.matrix_inverse(self.cov) # l2 reg to avoid sing matrix
@@ -94,7 +92,7 @@ class BellmanBasis:
 
     @staticmethod
     def stack_bias(x):
-        return TT.horizontal_stack(x, TT.ones((x.shape[0], 1)))
+        return TT.concatenate([x, TT.ones((x.shape[0], 1))], axis=1)
 
     @property
     def k(self):
@@ -178,8 +176,8 @@ class BellmanBasis:
     def bellman_funcs(self):
         ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
-        p0 = TT.horizontal_stack(self.PHI0_t, TT.ones((self.PHI0_t.shape[0], 1)))
-        plam = TT.horizontal_stack(self.PHIlam_t, TT.ones((self.PHIlam_t.shape[0], 1)))
+        p0 = TT.concatenate([self.PHI0_t, TT.ones((self.PHI0_t.shape[0], 1))], axis=1)
+        plam = TT.concatenate([self.PHIlam_t, TT.ones((self.PHIlam_t.shape[0], 1))], axis=1)
         b = TT.dot(p0.T, self.Rlam_t)
         a = TT.dot(p0.T, p0 - plam) + TT.eye(self.k + 1) * self.shift
         w_lstd = TT.dot(TL.matrix_inverse(a), b)
@@ -188,7 +186,7 @@ class BellmanBasis:
     def layered_funcs(self):
         ''' uses self.w_t when measuring loss'''
         # append const feature
-        A = TT.horizontal_stack(self.PHI0_t - self.PHIlam_t, TT.ones((self.PHI0_t.shape[0], 1)))
+        A = TT.concatenate([self.PHI0_t - self.PHIlam_t, TT.ones((self.PHI0_t.shape[0], 1))], axis=1)
         return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(A, self.w_t))))
 
     def reward_funcs(self):
