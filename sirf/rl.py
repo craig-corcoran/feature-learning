@@ -1,8 +1,7 @@
 import numpy
 import scipy.sparse
-import theano
 
-#TODO lambda version and distribution weighting
+#TODO lambda versions of losses
 
 class Model:
     ''' RL model, including reward, transition function, and functions for 
@@ -35,16 +34,19 @@ class Model:
 
         return d/numpy.linalg.norm(d)
 
-    def get_lstd_weights(self, PHI):
+    def get_lstd_weights(self, PHI): 
 
         a = numpy.dot(PHI.T, (PHI - self.gam * numpy.dot(self.P, PHI)))
         b = numpy.dot(PHI.T, self.R)
         if a.ndim > 0:
             return numpy.linalg.solve(a,b) 
         return numpy.array(b/a)
+
+    def append_bias(self, PHI):
+        return numpy.hstack((PHI, numpy.ones((PHI.shape[0], 1))))
     
     def bellman_error(self, PHI, w = None, weighting = 'uniform'):
-        
+        PHI = self.append_bias(PHI)
         if w is None:
             w = self.get_lstd_weights(PHI)
         
@@ -53,10 +55,35 @@ class Model:
         D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
         return numpy.linalg.norm(numpy.dot(D, (self.R - numpy.dot(A, w))))
 
+    def model_error(self, PHI, W = None, weighting = 'uniform'):
+        
+        A = numpy.dot(self.P, PHI)
+        PHI = self.append_bias(PHI) # include bias in A to be reconstructed?
+        if W is None:
+            W = numpy.linalg.lstsq(PHI, A)[0] 
+                
+        # diagonal weight matrix
+        D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
+        return numpy.linalg.norm(numpy.dot(D, (numpy.dot(PHI, W) - A)))
+
+    def reward_error(self, PHI, w = None, weighting = 'uniform'):
+        
+        PHI = self.append_bias(PHI)
+
+        if w is None:
+            w = numpy.linalg.lstsq(PHI, self.R)[0]
+
+        D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
+
+        a = numpy.linalg.norm(numpy.dot(D, (numpy.dot(PHI, w) - self.R)))
+        return a
+
     def value_error(self, PHI, w = None, weighting = 'uniform'):
 
         if PHI.ndim == 1:
             PHI = PHI[:,None]
+
+        PHI = self.append_bias(PHI)
         
         if w is None:
             w = numpy.linalg.lstsq(PHI, self.V)[0]

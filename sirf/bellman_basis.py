@@ -34,6 +34,11 @@ class BellmanBasis:
             thetas = [numpy.random.randn(a + 1, b) for a, b in self.shapes[:-1]]
             for theta in thetas:
                 theta /= numpy.sqrt((theta * theta).sum(axis=0))
+        else:
+            for i, theta in enumerate(thetas):
+                a,b = self.shapes[i]
+                assert theta.shape == (a+1, b)
+            
 
         params.extend(thetas)
 
@@ -74,8 +79,9 @@ class BellmanBasis:
             z = g(TT.dot(self.stack_bias(z), t))
         self.PHI_full_t = z
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
-        self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0]]
+        self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0],:]
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T
+        self.Z_t = TT.horizontal_stack(self.Rlam_t, self.PHIlam_t)
 
         self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + TS.square_diagonal(TT.ones((self.k, )) * self.shift)
         self.cov_inv = TL.matrix_inverse(self.cov) # l2 reg to avoid sing matrix
@@ -139,7 +145,7 @@ class BellmanBasis:
 
         grad_list = []
         for var in self.params_t:
-            try: # theano doesn't like it when you take the gradient of wrt an irrelevant var
+            try: # theano doesn't like it when you take the gradient wrt an irrelevant var
                 grad_list.append(theano.function(self.theano_vars, theano.grad(loss_t, var), **kw))
             except ValueError: # function not differentiable wrt var, just return zeros
                 grad_list.append(theano.function(self.theano_vars, TT.zeros_like(var), **kw))
@@ -177,35 +183,40 @@ class BellmanBasis:
         b = TT.dot(p0.T, self.Rlam_t)
         a = TT.dot(p0.T, p0 - plam) + TT.eye(self.k + 1) * self.shift
         w_lstd = TT.dot(TL.matrix_inverse(a), b)
-        return TT.sum(TT.sqr(self.Rlam_t - TT.dot(p0 - plam, w_lstd)))
+        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(p0 - plam, w_lstd))))
 
     def layered_funcs(self):
         ''' uses self.w_t when measuring loss'''
         # append const feature
         A = TT.horizontal_stack(self.PHI0_t - self.PHIlam_t, TT.ones((self.PHI0_t.shape[0], 1)))
-        return TT.sum(TT.sqr(self.Rlam_t - TT.dot(A, self.w_t)))
+        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(A, self.w_t))))
 
     def reward_funcs(self):
         # reward loss: ||(PHI0 (PHI0.T * PHI0))^-1 PHI0.T * Rlam - Rlam||
         d = TT.dot(self.PHI0_t.T, self.Rlam_t)
         w_r = TT.dot(self.cov_inv, d)
-        return TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.PHI0_t, w_r))) # frobenius norm
+        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.PHI0_t, w_r)))) # frobenius norm
 
     def model_funcs(self):
         # model loss: ||PHI0 (PHI0.T * PHI0)^-1 PHI0.T * PHIlam - PHIlam||
         bb = TT.dot(self.PHI0_t.T, self.PHIlam_t)
         w_m = TT.dot(self.cov_inv, bb) # least squares weight matrix
-        return TT.sum(TT.sqr(self.PHIlam_t - TT.dot(self.PHI0_t, w_m))) # frobenius norm
+        return TT.sqrt(TT.sum(TT.sqr(self.PHIlam_t - TT.dot(self.PHI0_t, w_m)))) # frobenius norm
 
     def covariance_funcs(self):
         # todo weight by stationary distribution if unsampled?
-        return TT.sum(TT.abs_(self.cov - self.beta_t * TT.dot(self.PHI0_t.T,self.PHIlam_t)))
+        # normalize columns?
+        return TT.sum(TT.abs_(self.cov - self.beta_t * TT.dot(self.PHI0_t.T,self.PHI0_t))) # l1 matrix norm, use Z here?
 
-    def prediction_funcs(self):
+    def prediction_funcs(self, norm_cols = True):
         # next-step feature loss: || PHI0 PHI0.T Z - Z || where Z = [ R | PHIlam ]
-        Z = TT.horizontal_stack(self.Rlam_t, self.PHIlam_t)
+        
+        if norm_cols:
+            Z = TT.true_div(self.Z_t,  TT.sqrt(TT.sum(TT.sqr(self.Z_t), axis=0)))
+        else:
+            Z = self.Z_t
         A = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, Z)) - Z
-        return TT.sum(TT.sqr(A)) # frobenius norm
+        return TT.sqrt(TT.sum(TT.sqr(A))) # frobenius norm
 
     def loss(self, vec, S, R, Mphi, Mrew):
         args = self._unpack_params(vec) + [S, R, Mphi, Mrew]
@@ -312,6 +323,10 @@ class BellmanBasis:
             self.params = self._unpack_params(vec)
         if params is not None:
             logger.info('setting params %s', ', '.join(str(p.shape) for p in params))
+            #for (a, b), p in zip(self.shapes, params):
+                #print 'a,b: ',a,b
+                #print 'p shape: ', p.shape
+                #self.params = p.reshape((a+1, b))
             self.params = [p.reshape((a + 1, b)) for (a, b), p in zip(self.shapes, params)]
 
     def _unpack_params(self, vec):
@@ -353,7 +368,7 @@ def plot_features(phi, r = None, c = None):
         else:
             F = numpy.vstack((F, _stack_feature_row(slic, r, c)))
     F = F.astype(numpy.float64)
-    v = 2*numpy.mean(numpy.abs(F)) # numpy.max(abs(F)) #
+    v = 2*numpy.mean(numpy.abs(F)) #  #numpy.max(abs(F))
     plt.imshow(F, cmap='gray', interpolation = 'nearest', vmin = -v, vmax = v)
     plt.axis('off')
     plt.colorbar()
