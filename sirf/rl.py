@@ -34,13 +34,14 @@ class Model:
 
         return d/numpy.linalg.norm(d)
 
-    def get_lstd_weights(self, PHI): 
+    def get_lstd_weights(self, PHI, shift = 1e-7): 
 
-        a = numpy.dot(PHI.T, (PHI - self.gam * numpy.dot(self.P, PHI)))
+        A = numpy.dot(PHI.T, (PHI - self.gam * numpy.dot(self.P, PHI)))
+        A += shift * numpy.eye(A.shape[0])
         b = numpy.dot(PHI.T, self.R)
-        if a.ndim > 0:
-            return numpy.linalg.solve(a,b) 
-        return numpy.array(b/a)
+        if A.ndim > 0:
+            return numpy.linalg.solve(A,b) 
+        return numpy.array(b/A)
 
     def append_bias(self, PHI):
         return numpy.hstack((PHI, numpy.ones((PHI.shape[0], 1))))

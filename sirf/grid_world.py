@@ -216,8 +216,8 @@ class MDP:
 
         if environment is None:
             goals = numpy.zeros((size,size))
-            goals[1,1] = 1
-            #print 'goal position: ', goals.nonzero()
+            goals[3,3] = 1
+            print 'goal position: ', goals.nonzero()
 
             walls = numpy.zeros((size,size))
             if walls_on:
