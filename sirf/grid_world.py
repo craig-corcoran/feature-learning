@@ -7,6 +7,7 @@ import bellman_basis
 from random import choice
 from itertools import izip
 from plotting import plot_features
+from scipy.sparse import issparse
 
 
 class GridWorld:
@@ -365,7 +366,8 @@ class TileFeatures():
                     pos = (i,j)
                     self.tile_ind[dim + pos] = ind
                     ind += 1
-
+        
+        # inverse dictionary
         self.ind_to_key = dict(izip(self.tile_ind.values(), self.tile_ind.keys()))
     
         # precompute encoded states, cache if too big?
@@ -378,6 +380,8 @@ class TileFeatures():
             co = self._encode_pos(pos)
             self.d_code_vec[x.tostring()] = co
             self.d_code_pos[pos] = co
+
+        self._calc_tile_basis()
     
     def _encode_pos(self, pos):
         ''' assumes pos is in an environment that is self.env_size square '''
@@ -394,6 +398,31 @@ class TileFeatures():
                             code[ind] = 1
         return code
 
+    def _calc_tile_basis(self):
+        # create the image matrix for every tile - precompute?
+        self.B = numpy.zeros((self.env_size**2, self.n_tiles))
+        for i in xrange(self.n_tiles):
+            tile_key = self.ind_to_key[i]
+            size = tile_key[:2]
+            pos = tile_key[2:]
+            im = numpy.zeros((self.env_size, self.env_size))
+            im[pos[0]:pos[0]+size[0], pos[1]:pos[1]+size[1]] = 1.
+            self.B[:, i] = im.flatten()
+
+    def encode_matrix(self, X):
+        
+        return X.dot(self.B)
+        
+
+    def _encode_matrix(self, X):
+
+        PHI = numpy.zeros(X.shape[0], self.n_tiles)
+        for i,x in enumerate(X):
+            y = x.todense() if issparse(X) else x
+            PHI[i,:] = self.d_code_vec[y.tostring()]
+
+        return PHI
+
     def encode_vec(self, vec):
         '''expects indicator vector that is len env_size^2 '''
         return self.d_code_vec[vec.tostring()]
@@ -407,18 +436,9 @@ class TileFeatures():
         return len(self.tile_ind)
 
     def weights_to_images(self, W):
+        # mult basis by weights
         assert W.shape[0] == self.n_tiles
-        # create the image matrix for every tile - precompute?
-        I = numpy.zeros((self.env_size**2, self.n_tiles))
-        for i in xrange(self.n_tiles):
-            tile_key = self.ind_to_key[i]
-            size = tile_key[:2]
-            pos = tile_key[2:]
-            im = numpy.zeros((self.env_size, self.env_size))
-            im[pos[0]:pos[0]+size[0], pos[1]:pos[1]+size[1]] = 1.
-            I[:, i] = im.flatten()
-        # then mult by weights
-        return numpy.dot(I, W)
+        return numpy.dot(self.B, W)
             
     
 def test_tiles(n_samples = 100):
@@ -447,10 +467,14 @@ def test_tiles(n_samples = 100):
             corner = key[2:] # position of top left corner
             _check_in_bounds(pos, corner, size)
 
+    M1 = tiles.encode_matrix(numpy.eye(tiles.n_tiles))
+    if issparse(M1): M1 = M1.todense()
+    M2 = tiles._encode_matrix(numpy.eye(tiles.n_tiles))
+    assert (M1 == M2).all()
+
     #bellman_basis.plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles))[:,:121])
     plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles)))
     plt.show()
-
 
 def _check_in_bounds(pos, corner, size):
     assert size[0] == size[1] # square
@@ -460,7 +484,6 @@ def _check_in_bounds(pos, corner, size):
     #print pos, corner, size
     assert (pos[0] - corner[0]) <= size[0]
     assert (pos[1] - corner[1]) <= size[1]
-
 
 if __name__ == '__main__':
     test_tiles()
