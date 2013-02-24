@@ -2,9 +2,12 @@ import copy
 import numpy
 import scipy.sparse
 import scipy.optimize
+import matplotlib.pyplot as plt
+import bellman_basis
+
 from random import choice
 from itertools import izip
-import matplotlib.pyplot as plt
+
 
 class GridWorld:
     ''' Grid world environment. State is represented as an (x,y) array and 
@@ -365,7 +368,7 @@ class TileFeatures():
 
         self.ind_to_key = dict(izip(self.tile_ind.values(), self.tile_ind.keys()))
     
-        # precompute encoded states
+        # precompute encoded states, cache if too big?
         self.d_code_vec = {}
         self.d_code_pos = {}
         for x in X:
@@ -376,7 +379,6 @@ class TileFeatures():
             self.d_code_vec[x.tostring()] = co
             self.d_code_pos[pos] = co
     
-    # precompute encoding for each state? / cache?
     def _encode_pos(self, pos):
         ''' assumes pos is in an environment that is self.env_size square '''
         code = numpy.zeros(self.n_tiles)
@@ -403,6 +405,21 @@ class TileFeatures():
     @property
     def n_tiles(self):
         return len(self.tile_ind)
+
+    def weights_to_images(self, W):
+        assert W.shape[0] == self.n_tiles
+        # create the image matrix for every tile - precompute?
+        I = numpy.zeros((self.env_size**2, self.n_tiles))
+        for i in xrange(self.n_tiles):
+            tile_key = self.ind_to_key[i]
+            size = tile_key[:2]
+            pos = tile_key[2:]
+            im = numpy.zeros((self.env_size, self.env_size))
+            im[pos[0]:pos[0]+size[0], pos[1]:pos[1]+size[1]] = 1.
+            I[:, i] = im.flatten()
+        # then mult by weights
+        return numpy.dot(I, W)
+            
     
 def test_tiles(n_samples = 100):
     
@@ -416,6 +433,7 @@ def test_tiles(n_samples = 100):
     print 'env size: ', env_size
 
     tiles = TileFeatures(mdp.env.n_rows, numpy.eye(env_size**2)) # assumes square env
+    print 'number of tiles: ', tiles.n_tiles
     
     test_pos = numpy.array([(0,0), (env_size-1, env_size-1), (0, env_size-1), (env_size - 1, 0)])
     test_pos = numpy.vstack([test_pos, numpy.round(numpy.random.random((n_samples, 2)) * (env_size-1))])
@@ -429,6 +447,9 @@ def test_tiles(n_samples = 100):
             corner = key[2:] # position of top left corner
             _check_in_bounds(pos, corner, size)
 
+    bellman_basis.plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles))[:,:121])
+    plt.show()
+
 
 def _check_in_bounds(pos, corner, size):
     assert size[0] == size[1] # square
@@ -438,6 +459,7 @@ def _check_in_bounds(pos, corner, size):
     #print pos, corner, size
     assert (pos[0] - corner[0]) <= size[0]
     assert (pos[1] - corner[1]) <= size[1]
+
 
 if __name__ == '__main__':
     test_tiles()

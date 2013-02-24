@@ -1,6 +1,4 @@
-import os, sys
 import copy
-import itertools
 import numpy
 import pickle
 import plac
@@ -31,6 +29,7 @@ logger = sirf.get_logger(__name__)
 @plac.annotations(
     workers=('number of condor workers', 'option', None, int),
     k=('number of features', 'option', None, int),
+    encoding=('feature encoding used (tabular, tiled)', 'option', None, str),
     env_size=('size of the grid world', 'option', 's', int),
     lam=('lambda for TD-lambda training', 'option', None, float),
     gam=('discount factor', 'option', None, float),
@@ -54,11 +53,12 @@ logger = sirf.get_logger(__name__)
     )
 def main(workers = 0,
          k = 36,
-         env_size = 17,
+         encoding = 'tabular',
+         env_size = 15,
          n_runs = 1,
          lam = 0.,
-         gam = 0.9995,
-         beta = 0.9995,
+         gam = 0.999,
+         beta = 0.999,
          alpha = 1.,
          eps = 1e-5, 
          patience = 15,
@@ -72,7 +72,7 @@ def main(workers = 0,
          nonlin = None,
          nonzero = None,
          training_methods = None,
-         min_imp = 0.0002,
+         min_imp = 0.0001,
          min_delta = 1e-6,
          fl_dir = '/scratch/cluster/ccor/feature-learning/',
          movie = False
@@ -83,10 +83,10 @@ def main(workers = 0,
     if training_methods is None:
         training_methods = [
             (['prediction'],[['theta-all']]),
-            (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
+            #(['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
             #(['covariance'],[['theta-all']]), # with reward, without fine-tuning
             #(['covariance', 'layered'], [['theta-all'],['theta-all','w']]), 
-            (['layered'], [['theta-all', 'w']]) # baseline
+            #(['layered'], [['theta-all', 'w']]) # baseline
             ]    
 
     print 'building environment'
@@ -220,8 +220,8 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,
             d_loss[loss] = numpy.append(arr, val)
         return d_loss
     
-    vmin = -0.3
-    vmax = 0.3
+    vmin = -0.25
+    vmax = 0.25
     switch = [] # list of indices where a training method switch occurred
     it = 0
     for i,loss in enumerate(loss_list):
@@ -264,7 +264,6 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,
                 norms = numpy.apply_along_axis(numpy.linalg.norm, 0, basis.thetas[0])
                 print 'column norms: %.2f min / %.2f avg / %.2f max' % (
                     norms.min(), norms.mean(), norms.max())
-                #basis.theta = numpy.apply_along_axis(lambda v: v/numpy.linalg.norm(v), 0, basis.theta)
                 
                 err = basis.loss(basis.flat_params, S_val, R_val, Mphi, Mrew)
                 
@@ -285,6 +284,10 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,
                     waiting += 1
                     print 'iters without better %s loss: ' % basis.loss_type, waiting
 
+                # check reward loss gradient
+                print 'norm of reward prediction gradient: ', numpy.linalg.norm(
+                    basis.grad_rew_pred(basis.flat_params, S, R, Mphi, Mrew))
+
                 d_loss = record_loss(d_loss)
 
 
@@ -293,13 +296,17 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,
         
         basis.set_params(vec = best_params)
         switch.append(it-1)
+    
+    sparse_eps = 1e-4
+    print 'final test bellman error: ', model.bellman_error(basis.thetas[-1][:-1], weighting = weighting)
+    print 'final sparsity: ', [sum(abs(th) < sparse_eps) / float(len(th.flatten())) for th in basis.params]
 
     # save results!
     with util.openz(fl_dir + 'sirf/output/pickle/learning_curve_results' + out_string + 'pickle.gz', "wb") as out_file:
         pickle.dump(d_loss, out_file, protocol = -1)
 
     # plot basis functions
-    plot_features(basis.thetas[-1][:-1])
+    plot_features(basis.thetas[-1][:-1, :36])
     plt.savefig(fl_dir + 'sirf/output/plots/basis' + out_string+ '.pdf')
     
     # plot learning curves
@@ -311,7 +318,7 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,
     plt.savefig(fl_dir + 'sirf/output/plots/value' + out_string + '.pdf')
 
     # plot the basis functions again!
-    _plot_features(basis.thetas[-1][:-1])
+    _plot_features(basis.thetas[-1][:-1, :36])
     plt.savefig(fl_dir + 'sirf/output/plots/basis0' + out_string + '.pdf')
 
     # make movie from basis files saved
@@ -348,7 +355,7 @@ def plot_learning_curves(d_loss, switch):
             ax.plot([switch[i], switch[i]], [0, 1], 'k--', label = 'training switch')
     plt.title('Losses per CG Minibatch')
     #ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    plt.ylim(0, 2.)
+    #plt.ylim(0, 2.)
     ax.legend()
 
 #def _plot_features(phi, r = None, c = None):

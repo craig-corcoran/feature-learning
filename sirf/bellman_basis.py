@@ -1,5 +1,4 @@
 import numpy
-import scipy.sparse
 import theano
 import theano.tensor as TT
 import theano.sparse as TS
@@ -15,7 +14,7 @@ logger = sirf.get_logger(__name__)
 
 class BellmanBasis:
 
-    LOSSES = 'bellman layered model reward covariance prediction nonzero l2code l1code l1theta'.split()
+    LOSSES = 'bellman layered model reward covariance prediction rew_prediction nonzero l2code l1code l1theta'.split()
 
     def __init__(self, n, ks, beta, alpha = 1., thetas = None, w = None, reg_tuple = None,
                  nonlin = None, nonzero = None, shift = 1e-6):
@@ -223,6 +222,16 @@ class BellmanBasis:
         A = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, Z)) - Z
         B = TS.structured_dot(self.Alpha_t, A.T).T
         return TT.sqrt(TT.sum(TT.sqr(B))) # frobenius norm
+    
+    def rew_prediction_funcs(self, norm_cols = True):
+        if norm_cols:
+            r = TT.true_div(self.Rlam_t,  TT.sqrt(TT.sum(TT.sqr(self.Rlam_t), axis=0)))
+        else:
+            r = self.Rlam_t
+        
+        A = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, r)) - r
+        return TT.sqrt(TT.sum(TT.sqr(A))) # frobenius norm
+        
 
     def loss(self, vec, S, R, Mphi, Mrew):
         args = self._unpack_params(vec) + [S, R, Mphi, Mrew]
@@ -251,7 +260,7 @@ class BellmanBasis:
         o = 0
         for i, (var, (a, b)) in enumerate(zip(self.param_names, self.shapes)):
             sl = slice(o, o + (a + 1) * b)
-            if (var in self.wrt) or ('all' in self.wrt) or ('theta' in var and 'theta-all' in self.wrt):
+            if (var in self.wrt) or ('all' in self.wrt) or ('theta' in var and 'theta-all' in self.wrt): # xxx?
                 grad[sl] += self.loss_grads[i](*args).flatten()
                 if self.reg_type is 'l1code':
                     _, l1_grads = self.losses['l1code']
@@ -264,6 +273,21 @@ class BellmanBasis:
                     grad[sl] += self.nonzero * nz_grads[i](*args).flatten()
             o += (a + 1) * b
         return grad
+
+    def grad_rew_pred(self, vec, S, R, Mphi, Mrew):
+        '''return the gradient of the reward prediction component of the 
+        prediction loss using the current wrt variables'''
+        args = self._unpack_params(vec) + [S, R, Mphi, Mrew]
+        grad = numpy.zeros_like(vec)
+        o = 0
+        loss, grads = self.losses['rew_prediction']
+        for i, (var, (a, b)) in enumerate(zip(self.param_names, self.shapes)):
+            sl = slice(o, o + (a + 1) * b)
+            if (var in self.wrt) or ('theta' in var and 'theta-all' in self.wrt): 
+                grad[sl] += grads[i](*args).flatten()
+            o += (a + 1) * b
+        return grad
+    
 
     @staticmethod
     def _calc_n_steps(lam, gam, eps):
