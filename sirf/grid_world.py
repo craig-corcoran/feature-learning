@@ -359,8 +359,8 @@ class TileFeatures():
         # generate square tiles : dim, pos, ind
         ind = 0
         for si in xrange(2, env_size):
-            for i in xrange(env_size - si):
-                for j in xrange(env_size - si):
+            for i in xrange(env_size - si + 1):
+                for j in xrange(env_size - si + 1):
                     dim = (si, si)
                     pos = (i,j)
                     self.tile_ind[dim + pos] = ind
