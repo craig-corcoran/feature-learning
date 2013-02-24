@@ -4,9 +4,9 @@ import scipy.sparse
 import scipy.optimize
 import matplotlib.pyplot as plt
 import bellman_basis
-
 from random import choice
 from itertools import izip
+from plotting import plot_features
 
 
 class GridWorld:
@@ -287,7 +287,7 @@ class MDP:
         rewards = numpy.zeros(n_samples, dtype = numpy.float)
 
         for i in xrange(n_samples):
-                
+
             choices = self.env.get_actions(self.env.state)
             action = self.policy.choose_action(choices)
             next_state, reward = self.env.take_action(action)
@@ -447,7 +447,8 @@ def test_tiles(n_samples = 100):
             corner = key[2:] # position of top left corner
             _check_in_bounds(pos, corner, size)
 
-    bellman_basis.plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles))[:,:121])
+    #bellman_basis.plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles))[:,:121])
+    plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles)))
     plt.show()
 
 
