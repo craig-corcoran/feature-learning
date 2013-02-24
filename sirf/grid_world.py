@@ -2,8 +2,12 @@ import copy
 import numpy
 import scipy.sparse
 import scipy.optimize
-from random import choice
 import matplotlib.pyplot as plt
+import bellman_basis
+
+from random import choice
+from itertools import izip
+
 
 class GridWorld:
     ''' Grid world environment. State is represented as an (x,y) array and 
@@ -13,8 +17,9 @@ class GridWorld:
 
     '''
 
-    _vecs = numpy.array([[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) # 4 movement dirs
-    action_to_code = dict(zip(map(tuple,_vecs),[(0, 0),(0, 1), (1, 0), (1, 1),(0,2)]))
+    _vecs = numpy.array([[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) # 5 movement dirs
+    n_actions = len(_vecs)
+    action_to_code = dict(zip(map(tuple,_vecs),[(0, 0),(0, 1), (1, 0), (1, 1), (0, 2)]))
     code_to_action = dict(zip(action_to_code.values(), action_to_code.keys()))
 
     def __init__(self, wall_matrix, goal_matrix, init_state = None, uniform = False):
@@ -26,7 +31,7 @@ class GridWorld:
         self.n_rows, self.n_cols = self.walls.shape
         self.n_states = self.n_rows * self.n_cols
         self.n_act_var = 2
-
+        
         self._adjacent = {}
         self._actions = {}
 
@@ -216,8 +221,8 @@ class MDP:
 
         if environment is None:
             goals = numpy.zeros((size,size))
-            goals[1,1] = 1
-            #print 'goal position: ', goals.nonzero()
+            goals[2,2] = 1
+            print 'goal position: ', goals.nonzero()
 
             walls = numpy.zeros((size,size))
             if walls_on:
@@ -229,141 +234,235 @@ class MDP:
         if policy is None:
             self.policy = RandomPolicy()
 
+        self.tiles = TileFeatures(self.env.n_rows, numpy.eye(self.n_states)) # assumes square
 
-    def _sample(self, n_samples, distribution = 'policy'):
-
-        ''' sample the interaction of policy and environment according to the 
-        given distribution for n_samples, returning arrays of state positions 
-        and rewards '''
-        
-        if distribution is 'uniform':
-        
-            #print 'sampling with a uniform distribution'
     
-            
-            states   = numpy.zeros((n_samples,2), dtype = numpy.int)
-            states_p = numpy.zeros((n_samples,2), dtype = numpy.int)
-            actions = numpy.zeros((n_samples,2), dtype = numpy.int)
-            actions_p = numpy.zeros((n_samples,2), dtype = numpy.int)
-            rewards = numpy.zeros(n_samples, dtype = numpy.int)
-            
-            for i in xrange(n_samples):
+    @property
+    def n_states(self):
+        return self.env.n_states
 
-                self.env.state = self.env.random_state()
-                s = copy.deepcopy(self.env.state)
+    @property
+    def n_actions(self):
+        return self.env.n_actions
+
+    def sample_uniform_onestep(self, n_samples):
+        ''' sample the interaction of policy and environment for n_samples, 
+        restarting each sample in a uniformly random state in the environment.
+        returns arrays of rewards, state positions, next state, action directions,
+        and next action.'''
+
+        states   = numpy.zeros((n_samples,2), dtype = numpy.int)
+        states_p = numpy.zeros((n_samples,2), dtype = numpy.int)
+        actions = numpy.zeros((n_samples,2), dtype = numpy.int)
+        actions_p = numpy.zeros((n_samples,2), dtype = numpy.int)
+        rewards = numpy.zeros(n_samples, dtype = numpy.int)
         
-                choices = self.env.get_actions(self.env.state)
-                a = self.policy.choose_action(choices)
-                s_p, r = self.env.take_action(a)
-            
-                choices = self.env.get_actions(self.env.state)
-                a_p = self.policy.choose_action(choices)
-                
-                states[i] = s
-                states_p[i] = s_p
-                actions[i] = a
-                actions_p[i] = a_p
-                rewards[i] = r
-            
-            s = states
-            s_p = states_p
-            a = actions
-            a_p = actions_p
-
-
-        elif distribution is 'policy':
-
-            #print 'sampling with a policy distribution'
-
-            states = numpy.zeros((n_samples+1,2), dtype = numpy.float)
-            states[0] = self.env.state
-            actions = numpy.zeros((n_samples+1,2), dtype = numpy.float)
-            rewards = numpy.zeros(n_samples, dtype = numpy.float)
-
-            for i in xrange(n_samples):
-                    
-                choices = self.env.get_actions(self.env.state)
-                action = self.policy.choose_action(choices)
-                next_state, reward = self.env.take_action(action)
-
-                states[i+1] = next_state
-                actions[i] = action
-                rewards[i] = reward
-        
-            choices = self.env.get_actions(self.env.state)
-            action = self.policy.choose_action(choices)
-            actions[i+1] = action
-
-            s   = states[:-1,:]
-            s_p = states[1:, :]
-            a = actions[:-1,:]
-            a_p = actions[1:,:]
-            
-        else:
-            print 'bad distribution string'
-            assert False
-
-        return s, s_p, a, a_p, rewards
-
-
-    def sample_grid_world(self, n_samples, state_rep = 'tabular', distribution = 'policy', 
-                    require_reward = False, add_const_feat = True):
-        ''' returns samples from the grid world mdp
-        using state_rep for the features and sampling from the given 
-        distribution type, either on-policy or uniform (one-step). samples are
-        returned in the form [s,s',r,a]'''
-        rewards = 0
-        states, states_p, actions, actions_p, rewards = self._sample(n_samples, distribution)
-        if require_reward: 
-            while numpy.sum(rewards) == 0:
-                states, states_p, actions, actions_p, rewards = self._sample(n_samples, distribution)
-            
-        if state_rep == 'tabular':
-            n_state_var = self.env.n_states
-        elif state_rep == 'factored':
-            n_state_var = self.env.n_rows + self.env.n_cols
-
-        X = numpy.zeros((n_samples, 2 * n_state_var + self.env.n_act_var + 1)) 
-
         for i in xrange(n_samples):
 
-            if state_rep == 'tabular':
-                X[i,self.env.state_to_index(states[i,:])] = 1
-                X[i,n_state_var + self.env.state_to_index(states_p[i,:])] = 1
-                X[i,2*n_state_var] = rewards[i]
-                X[i,2*n_state_var + 1:] = self.env.action_to_code[tuple(actions[i,:])]
+            self.env.state = self.env.random_state()
+            s = copy.deepcopy(self.env.state)
+    
+            choices = self.env.get_actions(self.env.state)
+            a = self.policy.choose_action(choices)
+            s_p, r = self.env.take_action(a)
+        
+            choices = self.env.get_actions(self.env.state)
+            a_p = self.policy.choose_action(choices)
+            
+            states[i] = s
+            states_p[i] = s_p
+            actions[i] = a
+            actions_p[i] = a_p
+            rewards[i] = r
+        
+        return rewards, states, states_p, actions, actions_p
 
-            elif state_rep == 'factored':
-                state = states[i,:]
-                state_p = states_p[i,:]
+    def sample_policy(self, n_samples):
+        ''' sample the interaction of policy and environment for n_samples, 
+        returning arrays of rewards, state positions, and action directions '''
+
+        states = numpy.zeros((n_samples+1,2), dtype = numpy.float)
+        states[0] = self.env.state
+        actions = numpy.zeros((n_samples+1,2), dtype = numpy.float)
+        rewards = numpy.zeros(n_samples, dtype = numpy.float)
+
+        for i in xrange(n_samples):
                 
-                # todo add standard encoding function
-                # encode row and col position
-                X[i,state[0]] = 1 
-                X[i,self.env.n_rows + state[1]] = 1
-                X[i,n_state_var + state_p[0]] = 1
-                X[i,n_state_var + self.env.n_rows + state_p[1]] = 1
-                X[i,2*n_state_var] = rewards[i]     
-                X[i,2*n_state_var + 1:] = self.env.action_to_code[tuple(actions[i,:])]
+            choices = self.env.get_actions(self.env.state)
+            action = self.policy.choose_action(choices)
+            next_state, reward = self.env.take_action(action)
 
-        S = X[:,:n_state_var]
-        Sp = X[:,n_state_var:2*n_state_var]
-        if add_const_feat:
-            S = numpy.hstack((S, numpy.ones((S.shape[0], 1))))
-            Sp = numpy.hstack((Sp, numpy.ones((Sp.shape[0], 1))))
-        r = X[:,2*n_state_var:2*n_state_var+1]
-        a = X[:,2*n_state_var + 1:]
+            states[i+1] = next_state
+            actions[i] = action
+            rewards[i] = reward
+    
+        choices = self.env.get_actions(self.env.state)
+        action = self.policy.choose_action(choices)
+        actions[i+1] = action
+        
+        return rewards, states, actions
 
-        return S, Sp, r, a
+    def sample_encoding(self, n_samples, encoding = None, append_const = True): # require reward?
+        ''' returns samples from the grid world mdp
+        using encoding for the features and sampling from the mdp's policy. 
+        samples are returned in the order rew, state, act.'''
 
-def main():
+        rewards, states, actions = self.sample_policy(n_samples)
+
+        if encoding == 'tabular':
+            
+            col_s = numpy.zeros(n_samples, dtype = numpy.int)
+            col_a = numpy.zeros(n_samples, dtype = numpy.int)
+            for i in xrange(n_samples + 1):
+                col_s[i] = self.env.state_to_index(states[i,:])
+                col_a[i] = self.env.action_to_code[tuple(actions[i,:])]
+            row = numpy.arange(n_samples + 1)
+            
+            # use sparse matrices for tabular
+            S = scipy.sparse.coo_matrix(numpy.ones(n_samples+1), numpy.hstack((row[None,:], col_s[None,:])), shape = (n_samples + 1 , self.n_states)) 
+            A = scipy.sparse.coo_matrix(numpy.ones(n_samples+1), numpy.hstack((row[None,:], col_a[None,:])), shape = (n_samples + 1 , self.n_actions))
+
+            S = scipy.sparse.csr_matrix(S)
+            A = scipy.sparse.csr_matrix(A)
+            
+
+        elif encoding == 'factored':
+            raise NotImplementedError 
+        
+        elif encoding == 'square-tile':
+            
+            S = numpy.zeros((n_samples+1, self.tiles.n_tiles))
+            A = numpy.zeros((n_samples+1, self.tiles.n_tiles))
+            print 'tiling not performed over actions, action matrix will be empty'
+            for i in xrange(n_samples + 1):
+                S[i,:] = self.tiles.encode_pos(states[i])
+                #A[i,:] = tiles.encode_act(actions[i]) # not implemented, returns empty action matrix
+            S = scipy.sparse.csr_matrix(S)
+            A = scipy.sparse.csr_matrix(A)
+
+        R = scipy.sparse.csr_matrix(rewards[:,None])
+
+        if append_const:
+            S = scipy.sparse.hstack([S, scipy.sparse.csr_matrix(numpy.ones(S.shape[0])[:,None])])
+            A = scipy.sparse.hstack([A, scipy.sparse.csr_matrix(numpy.ones(S.shape[0])[:,None])])
+
+        return R, S, A
+
+class TileFeatures():
+    
+    def __init__(self, env_size, X):
+        ''' builds square tile codes for a square grid world that is env_size x env_size
+        and X is a matrix where each row is a low-level (tabular) representation of the state'''
+        
+        self.env_size = env_size
+        self.tile_ind = {}
+        # generate square tiles : dim, pos, ind
+        ind = 0
+        for si in xrange(2, env_size):
+            for i in xrange(env_size - si):
+                for j in xrange(env_size - si):
+                    dim = (si, si)
+                    pos = (i,j)
+                    self.tile_ind[dim + pos] = ind
+                    ind += 1
+
+        self.ind_to_key = dict(izip(self.tile_ind.values(), self.tile_ind.keys()))
+    
+        # precompute encoded states, cache if too big?
+        self.d_code_vec = {}
+        self.d_code_pos = {}
+        for x in X:
+            nz = zip(*numpy.nonzero(numpy.reshape(x, (self.env_size, self.env_size))))
+            assert len(nz) == 1
+            pos = nz[0]
+            co = self._encode_pos(pos)
+            self.d_code_vec[x.tostring()] = co
+            self.d_code_pos[pos] = co
+    
+    def _encode_pos(self, pos):
+        ''' assumes pos is in an environment that is self.env_size square '''
+        code = numpy.zeros(self.n_tiles)
+        for i in xrange(self.env_size - 1):
+            for j in xrange(self.env_size - 1): 
+                min_size = min(pos[0] - i, pos[1] - j) + 1
+                if min_size > 0:
+                    max_size = min(self.env_size - i, self.env_size - j)
+                    for si in xrange(max(2, min_size), max_size):            
+                        if ((pos[0] - i) < si) and ((pos[1] - j) < si):
+                            #_check_in_bounds(pos, (i,j), (si,si))
+                            ind = self.tile_ind[(si, si, i, j)]
+                            code[ind] = 1
+        return code
+
+    def encode_vec(self, vec):
+        '''expects indicator vector that is len env_size^2 '''
+        return self.d_code_vec[vec.tostring()]
+
+    def encode_pos(self, pos):
+        '''expects position row, col tuple '''
+        return self.d_code_pos[tuple(pos)]
+    
+    @property
+    def n_tiles(self):
+        return len(self.tile_ind)
+
+    def weights_to_images(self, W):
+        assert W.shape[0] == self.n_tiles
+        # create the image matrix for every tile - precompute?
+        I = numpy.zeros((self.env_size**2, self.n_tiles))
+        for i in xrange(self.n_tiles):
+            tile_key = self.ind_to_key[i]
+            size = tile_key[:2]
+            pos = tile_key[2:]
+            im = numpy.zeros((self.env_size, self.env_size))
+            im[pos[0]:pos[0]+size[0], pos[1]:pos[1]+size[1]] = 1.
+            I[:, i] = im.flatten()
+        # then mult by weights
+        return numpy.dot(I, W)
+            
+    
+def test_tiles(n_samples = 100):
+    
     mdp = MDP()
-    s, sp, r, a = mdp.sample_grid_world(100)
-    R = mdp.env.R
-    P = mdp.env.P
+    r, s, a = mdp.sample_encoding(n_samples, 'square-tile')
+    assert r.shape[0] == s.shape[0]-1 == a.shape[0] - 1
+    
+    print s.todense()
+    
+    env_size = mdp.env.n_rows
+    print 'env size: ', env_size
+
+    tiles = TileFeatures(mdp.env.n_rows, numpy.eye(env_size**2)) # assumes square env
+    print 'number of tiles: ', tiles.n_tiles
+    
+    test_pos = numpy.array([(0,0), (env_size-1, env_size-1), (0, env_size-1), (env_size - 1, 0)])
+    test_pos = numpy.vstack([test_pos, numpy.round(numpy.random.random((n_samples, 2)) * (env_size-1))])
+    for pos in test_pos:
+        code = tiles.encode_pos(pos)
+        nz = numpy.nonzero(code)[0] # array of nonzero indices
+
+        for ind in nz:
+            key = tiles.ind_to_key[ind]
+            size = key[:2] # size of tile
+            corner = key[2:] # position of top left corner
+            _check_in_bounds(pos, corner, size)
+
+    bellman_basis.plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles))[:,:121])
+    plt.show()
+
+
+def _check_in_bounds(pos, corner, size):
+    assert size[0] == size[1] # square
+    assert corner[0] <= pos[0]
+    assert corner[1] <= pos[1]
+
+    #print pos, corner, size
+    assert (pos[0] - corner[0]) <= size[0]
+    assert (pos[1] - corner[1]) <= size[1]
+
 
 if __name__ == '__main__':
-    main()
+    test_tiles()
 
 
 
