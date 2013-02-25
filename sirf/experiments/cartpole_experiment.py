@@ -22,16 +22,16 @@ def sample(n):
         # episodes are lists of [pstate, paction, reward, state, next_action]
         for state, _, reward, next_state, _ in w.single_episode():
             episodes += 1
-            states.append(state)
+            states.append(state + [1])
             rewards.append([reward])
             if len(states) == n:
-                states.append(next_state)
+                states.append(next_state + [1])
                 break
     s = numpy.asarray(states)
     r = numpy.asarray(rewards)
     logger.info('sampled %s states and %s rewards from %d episodes',
                 s.shape, r.shape, episodes)
-    return scipy.sparse.csc_matrix(s), scipy.sparse.csc_matrix(r)
+    return scipy.sparse.csr_matrix(s), scipy.sparse.csr_matrix(r)
 
 
 @sirf.annotations(
@@ -46,9 +46,7 @@ def sample(n):
     l1theta=('regularize theta with this L1 parameter', 'option', None, float),
     l1code=('regularize feature code with this L1 parameter', 'option', None, float),
     n_samples=('sample this many state transitions', 'option', None, int),
-    loss_types=('train on these losses in this order', 'option', None, str),
-    grad_vars=('compute gradient using these variables', 'option', None, str),
-    nonlin=('feature nonlinearity', 'option', None, str, ['sigmoid', 'relu']),
+    nonlin=('feature nonlinearity', 'option', None, str, ['sigmoid', 'relu', 'linear']),
     nonzero=('penalty for zero theta vectors', 'option', None, float),
     method=('training method', 'option', None, int),
     output=('save results in this file', 'option', None, str),
@@ -64,8 +62,6 @@ def main(ks = 16,
          l1theta = None,
          l1code = None,
          n_samples = None,
-         loss_types = 'covariance bellman',
-         grad_vars = 'theta-all',
          nonlin = None,
          nonzero = None,
          method = 0,
@@ -175,33 +171,46 @@ def main(ks = 16,
         with sirf.openz(root + '.pickle.gz', 'wb') as handle:
             pickle.dump((bb.thetas, losses), handle, protocol=-1)
 
-        plot_features(root, bb)
+        #plot_features(root, bb)
 
 
 def plot_features(root, bb):
+    ranges = {'x': 3, r'\dot{x}': 15, r'\theta': 0.3, r'\dot{\theta}': 15}
+    grid = 11
+    space = lambda k: enumerate(numpy.linspace(-ranges[k], ranges[k], grid))
+
     logger.info('computing feature responses')
-    probe = numpy.zeros((bb.thetas[-1].shape[1], 11, 11, 11, 11), float)
-    for i, x in enumerate(numpy.linspace(-3, 3, 11)):
-        for j, dx in enumerate(numpy.linspace(-15, 15, 11)):
-            for k, t in enumerate(numpy.linspace(-0.3, 0.3, 11)):
-                for l, dt in enumerate(numpy.linspace(-15, 15, 11)):
+    probe = numpy.zeros((bb.thetas[-1].shape[1], grid, grid, grid, grid), float)
+    for i, x in space(r'x'):
+        for j, dx in space(r'\dot{x}'):
+            for k, t in space(r'\theta'):
+                for l, dt in space(r'\dot{\theta}'):
                     probe[:, i, j, k, l] = bb.encode([x, dx, t, dt])
 
     s = int(numpy.ceil(numpy.sqrt(len(probe))))
-    for title, sum1, sum2 in (
-        (r'$x, \dot{x}$', -1, -1),
-        (r'$\theta, \dot{\theta}$', 0, 0),
-        (r'$x, \theta$', 1, -1),
-        (r'$\dot{x}, \dot{\theta}$', 0, -2),
+    for abs, ord, sum1, sum2 in (
+        (r'x', r'\dot{x}', -1, -1),
+        (r'\theta', r'\dot{\theta}', 0, 0),
+        (r'x', r'\theta', 1, -1),
+        (r'\dot{x}', r'\dot{\theta}', 0, -2),
         ):
         plt.clf()
-        plt.title(title)
         for i, pr in enumerate(probe):
             ax = plt.subplot(s, s, i + 1)
             ax.imshow(pr.sum(axis=sum1).sum(axis=sum2))
-            ax.set_xticks([])
-            ax.set_yticks([])
-        clean = re.sub(r'\W+', '-', title[1:-1].strip('}').strip('\\'))
+            if i >= (s - 1) * s:
+                ax.set_xlabel('$%s$' % abs)
+                ax.set_xticks([0, grid])
+                ax.set_xticklabels([-ranges[abs], ranges[abs]])
+            else:
+                ax.set_xticks([])
+            if i % s == 0:
+                ax.set_ylabel('$%s$' % ord)
+                ax.set_yticks([0, grid])
+                ax.set_yticklabels([-ranges[ord], ranges[ord]])
+            else:
+                ax.set_yticks([])
+        clean = re.sub(r'\W+', '-', ('%s %s' % (abs, ord)).strip('}').strip('\\'))
         plt.savefig('%s-%s.pdf' % (root, clean), dpi=1200)
 
 
