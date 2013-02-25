@@ -3,11 +3,9 @@ import numpy
 import scipy.sparse
 import scipy.optimize
 import matplotlib.pyplot as plt
-import bellman_basis
 from random import choice
 from itertools import izip
 from plotting import plot_features
-from scipy.sparse import issparse
 
 
 class GridWorld:
@@ -20,8 +18,9 @@ class GridWorld:
 
     _vecs = numpy.array([[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) # 5 movement dirs
     n_actions = len(_vecs)
-    action_to_code = dict(zip(map(tuple,_vecs),[(0, 0),(0, 1), (1, 0), (1, 1), (0, 2)]))
-    code_to_action = dict(zip(action_to_code.values(), action_to_code.keys()))
+    action_to_code = dict(izip(map(tuple,_vecs),[(0, 0),(0, 1), (1, 0), (1, 1), (0, 2)]))
+    code_to_action = dict(izip(action_to_code.values(), action_to_code.keys()))
+    action_to_index = dict(izip(map(tuple,_vecs), xrange(n_actions))) # todo make function instead of dict?
 
     def __init__(self, wall_matrix, goal_matrix, init_state = None, uniform = False):
         
@@ -246,6 +245,10 @@ class MDP:
     def n_actions(self):
         return self.env.n_actions
 
+    @property
+    def state_to_index(self):
+        return self.env.state_to_index
+
     def sample_uniform_onestep(self, n_samples):
         ''' sample the interaction of policy and environment for n_samples, 
         restarting each sample in a uniformly random state in the environment.
@@ -309,39 +312,28 @@ class MDP:
         samples are returned in the order rew, state, act.'''
 
         rewards, states, actions = self.sample_policy(n_samples)
+        
+        col_s = [self.env.state_to_index(s) for s in states]
+        col_a = [self.env.action_to_index[tuple(a)] for a in actions]
+        row = numpy.arange(n_samples + 1)
+
+        # use sparse matrices 
+
+        S = scipy.sparse.coo_matrix((numpy.ones(n_samples+1), (row, col_s)), shape = (n_samples + 1 , self.n_states)) 
+        A = scipy.sparse.coo_matrix((numpy.ones(n_samples+1), (row, col_a)), shape = (n_samples + 1 , self.n_actions))
+        S = scipy.sparse.csr_matrix(S)
+        A = scipy.sparse.csr_matrix(A)
+        R = scipy.sparse.csr_matrix(rewards[:,None])
 
         if encoding == 'tabular':
-            
-            col_s = numpy.zeros(n_samples, dtype = numpy.int)
-            col_a = numpy.zeros(n_samples, dtype = numpy.int)
-            for i in xrange(n_samples + 1):
-                col_s[i] = self.env.state_to_index(states[i,:])
-                col_a[i] = self.env.action_to_code[tuple(actions[i,:])]
-            row = numpy.arange(n_samples + 1)
-            
-            # use sparse matrices for tabular
-            S = scipy.sparse.coo_matrix(numpy.ones(n_samples+1), numpy.hstack((row[None,:], col_s[None,:])), shape = (n_samples + 1 , self.n_states)) 
-            A = scipy.sparse.coo_matrix(numpy.ones(n_samples+1), numpy.hstack((row[None,:], col_a[None,:])), shape = (n_samples + 1 , self.n_actions))
-
-            S = scipy.sparse.csr_matrix(S)
-            A = scipy.sparse.csr_matrix(A)
-            
+            pass
+            #return R, S, A
 
         elif encoding == 'factored':
             raise NotImplementedError 
         
         elif encoding == 'square-tile':
-            
-            S = numpy.zeros((n_samples+1, self.tiles.n_tiles))
-            A = numpy.zeros((n_samples+1, self.tiles.n_tiles))
-            print 'tiling not performed over actions, action matrix will be empty'
-            for i in xrange(n_samples + 1):
-                S[i,:] = self.tiles.encode_pos(states[i])
-                #A[i,:] = tiles.encode_act(actions[i]) # not implemented, returns empty action matrix
-            S = scipy.sparse.csr_matrix(S)
-            A = scipy.sparse.csr_matrix(A)
-
-        R = scipy.sparse.csr_matrix(rewards[:,None])
+            S = self.tiles.encode(S)
 
         if append_const:
             S = scipy.sparse.hstack([S, scipy.sparse.csr_matrix(numpy.ones(S.shape[0])[:,None])])
@@ -349,14 +341,18 @@ class MDP:
 
         return R, S, A
 
+# TODO tabular feature class
+
 class TileFeatures():
     
-    def __init__(self, env_size, X):
+    def __init__(self, env_size, X, append_const = True):
         ''' builds square tile codes for a square grid world that is env_size x env_size
         and X is a matrix where each row is a low-level (tabular) representation of the state'''
         
         self.env_size = env_size
         self.tile_ind = {}
+        self.B = numpy.zeros((self.env_size**2, self.n_tiles))
+            
         # generate square tiles : dim, pos, ind
         ind = 0
         for si in xrange(2, env_size):
@@ -365,115 +361,70 @@ class TileFeatures():
                     dim = (si, si)
                     pos = (i,j)
                     self.tile_ind[dim + pos] = ind
+
+                    im = numpy.zeros((self.env_size, self.env_size))
+                    im[pos[0]:pos[0]+dim[0], pos[1]:pos[1]+dim[1]] = 1.
+
+                    flat_im = im.flatten()[:, None]
+                    self.B = flat_im if ind is 0 else numpy.hstack([self.B, flat_im])
                     ind += 1
-        
+    
+        if append_const:
+            self.B = numpy.hstack((self.B, numpy.ones((self.B.shape[0],1))))
+        self.B = scipy.sparse.csr_matrix(self.B)
+
         # inverse dictionary
         self.ind_to_key = dict(izip(self.tile_ind.values(), self.tile_ind.keys()))
-    
-        # precompute encoded states, cache if too big?
-        self.d_code_vec = {}
-        self.d_code_pos = {}
-        for x in X:
-            nz = zip(*numpy.nonzero(numpy.reshape(x, (self.env_size, self.env_size))))
-            assert len(nz) == 1
-            pos = nz[0]
-            co = self._encode_pos(pos)
-            self.d_code_vec[x.tostring()] = co
-            self.d_code_pos[pos] = co
-
-        self._calc_tile_basis()
-    
-    def _encode_pos(self, pos):
-        ''' assumes pos is in an environment that is self.env_size square '''
-        code = numpy.zeros(self.n_tiles)
-        for i in xrange(self.env_size - 1):
-            for j in xrange(self.env_size - 1): 
-                min_size = min(pos[0] - i, pos[1] - j) + 1
-                if min_size > 0:
-                    max_size = min(self.env_size - i, self.env_size - j)
-                    for si in xrange(max(2, min_size), max_size):            
-                        if ((pos[0] - i) < si) and ((pos[1] - j) < si):
-                            #_check_in_bounds(pos, (i,j), (si,si))
-                            ind = self.tile_ind[(si, si, i, j)]
-                            code[ind] = 1
-        return code
-
-    def _calc_tile_basis(self):
-        # create the image matrix for every tile - precompute?
-        self.B = numpy.zeros((self.env_size**2, self.n_tiles))
-        for i in xrange(self.n_tiles):
-            tile_key = self.ind_to_key[i]
-            size = tile_key[:2]
-            pos = tile_key[2:]
-            im = numpy.zeros((self.env_size, self.env_size))
-            im[pos[0]:pos[0]+size[0], pos[1]:pos[1]+size[1]] = 1.
-            self.B[:, i] = im.flatten()
-
-    def encode_matrix(self, X):
-        
-        return X.dot(self.B)
-        
-
-    def _encode_matrix(self, X):
-
-        PHI = numpy.zeros(X.shape[0], self.n_tiles)
-        for i,x in enumerate(X):
-            y = x.todense() if issparse(X) else x
-            PHI[i,:] = self.d_code_vec[y.tostring()]
-
-        return PHI
-
-    def encode_vec(self, vec):
-        '''expects indicator vector that is len env_size^2 '''
-        return self.d_code_vec[vec.tostring()]
-
-    def encode_pos(self, pos):
-        '''expects position row, col tuple '''
-        return self.d_code_pos[tuple(pos)]
+        print 'total number of tiles: ', ind
     
     @property
     def n_tiles(self):
         return len(self.tile_ind)
 
-    def weights_to_images(self, W):
-        # mult basis by weights
-        assert W.shape[0] == self.n_tiles
-        return numpy.dot(self.B, W)
+    def encode(self, X):
+        # ensure we use the sparsity of B, whether X is sparse or not
+        return self.B.T.dot(X.T).T 
+
+    def weights_to_basis(self, W):
+        # multiply basis by weights
+        assert W.shape[0] == self.n_tiles + 1
+        return self.B.dot(W)
             
+def indicator(ind, le):
+    a = numpy.zeros(le)
+    a[ind] = 1
+    return a
+
+def test_tiles(n_samples = 100, env_size = 15):
     
-def test_tiles(n_samples = 100):
-    
-    mdp = MDP()
+    mdp = MDP(size = env_size)
     r, s, a = mdp.sample_encoding(n_samples, 'square-tile')
     assert r.shape[0] == s.shape[0]-1 == a.shape[0] - 1
     
     print s.todense()
     
     env_size = mdp.env.n_rows
+    n = env_size**2
     print 'env size: ', env_size
+    print 'dim: ', n
 
     tiles = TileFeatures(mdp.env.n_rows, numpy.eye(env_size**2)) # assumes square env
     print 'number of tiles: ', tiles.n_tiles
     
     test_pos = numpy.array([(0,0), (env_size-1, env_size-1), (0, env_size-1), (env_size - 1, 0)])
     test_pos = numpy.vstack([test_pos, numpy.round(numpy.random.random((n_samples, 2)) * (env_size-1))])
-    for pos in test_pos:
-        code = tiles.encode_pos(pos)
-        nz = numpy.nonzero(code)[0] # array of nonzero indices
-
+    X = numpy.array([indicator(mdp.state_to_index(pos), mdp.n_states ) for pos in test_pos])
+    S = tiles.encode(X)
+    for pos, st in izip(test_pos, S):
+        nz = numpy.nonzero(st)[0] # array of nonzero indices
         for ind in nz:
             key = tiles.ind_to_key[ind]
             size = key[:2] # size of tile
             corner = key[2:] # position of top left corner
             _check_in_bounds(pos, corner, size)
 
-    M1 = tiles.encode_matrix(numpy.eye(tiles.n_tiles))
-    if issparse(M1): M1 = M1.todense()
-    M2 = tiles._encode_matrix(numpy.eye(tiles.n_tiles))
-    assert (M1 == M2).all()
-
     #bellman_basis.plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles))[:,:121])
-    plot_features(tiles.weights_to_images(numpy.eye(tiles.n_tiles)))
+    plot_features(tiles.weights_to_basis(numpy.eye(tiles.n_tiles)))
     plt.show()
 
 def _check_in_bounds(pos, corner, size):

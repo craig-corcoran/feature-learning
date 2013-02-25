@@ -17,9 +17,9 @@ class BellmanBasis:
     LOSSES = 'bellman layered model reward covariance prediction rew_prediction nonzero l2code l1code l1theta'.split()
 
     def __init__(self, n, ks, beta, alpha = 1., thetas = None, w = None, reg_tuple = None,
-                 nonlin = None, nonzero = None, shift = 1e-6):
-
-        self.n = n # dim of data
+                 nonlin = None, nonzero = None, shift = 1e-6, input_bias = True):
+        
+        self.n = n - 1 if input_bias else n # dim of input data (not including bias)
         self.ks = ks # num of hidden layer features
         self.nonzero = nonzero  # set this to some positive float to penalize zero theta vectors.
         self.shift = shift # prevent singular matrix inversion with this pseudoinverse scalar.
@@ -214,7 +214,7 @@ class BellmanBasis:
     def prediction_funcs(self, norm_cols = True):
         # next-step feature loss: || PHI0 PHI0.T Z - Z || where Z = [ R | PHIlam ]
         
-        if norm_cols:
+        if norm_cols: #TODO zero mean?
             Z = TT.true_div(self.Z_t,  TT.sqrt(TT.sum(TT.sqr(self.Z_t), axis=0)))
         else:
             Z = self.Z_t

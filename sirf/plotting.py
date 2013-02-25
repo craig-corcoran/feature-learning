@@ -2,7 +2,6 @@ import numpy
 import matplotlib.pyplot as plt
 
 def plot_features(phi, r = None, c = None, vmin = None, vmax = None):
-    plt.clf()
     j,k = phi.shape
     if r is None:
         r = c = numpy.round(numpy.sqrt(j))
