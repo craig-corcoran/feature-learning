@@ -398,7 +398,7 @@ def plot_features(phi, r = None, c = None, vmin = None, vmax = None):
 def _stack_feature_row(phi_slice, r, c):
     for i in xrange(phi_slice.shape[1]):
         im = numpy.reshape(phi_slice[:,i], (r,c))
-        I = numpy.zeros((r+2,c+2)) # pad with white value
+        I = numpy.zeros((r+2,c+2)) # pad with zeros
         I[1:-1,1:-1] = im
         if i == 0:
             F = I

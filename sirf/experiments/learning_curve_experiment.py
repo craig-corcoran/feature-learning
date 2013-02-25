@@ -72,7 +72,7 @@ def main(workers = 0,
          nonlin = None,
          nonzero = None,
          training_methods = None,
-         min_imp = 0.0001,
+         min_imp = 0.0002,
          min_delta = 1e-6,
          fl_dir = '/scratch/cluster/ccor/feature-learning/',
          movie = False
@@ -83,10 +83,10 @@ def main(workers = 0,
     if training_methods is None:
         training_methods = [
             (['prediction'],[['theta-all']]),
-            #(['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
+            (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
             #(['covariance'],[['theta-all']]), # with reward, without fine-tuning
             #(['covariance', 'layered'], [['theta-all'],['theta-all','w']]), 
-            #(['layered'], [['theta-all', 'w']]) # baseline
+            (['layered'], [['theta-all', 'w']]) # baseline
             ]    
 
     print 'building environment'
@@ -321,10 +321,28 @@ def train_basis(basis_params, basis_dict, method, model, d_loss, S, R,
     _plot_features(basis.thetas[-1][:-1, :36])
     plt.savefig(fl_dir + 'sirf/output/plots/basis0' + out_string + '.pdf')
 
+    # plot spectrum of reward and features
+    gen_spectrum(IM, model.P, model.R)
+
     # make movie from basis files saved
     #make_learning_movie(movie_path, out_string)
 
     #return basis, d_loss
+
+def gen_spectrum(Inp, P, R):
+    Inp /= numpy.sqrt((Inp * Inp).sum(axis=0))
+    w,v = numpy.linalg.eig( P )#- beta * numpy.eye(m.P.shape[0]))
+    v = v[:, numpy.argsort(abs(w))]
+    v = numpy.real(v)
+    mag = abs(numpy.dot(Inp.T, v))
+    r_mag = abs(numpy.dot(R.T, v))
+    
+    # plot feature spectrums
+    x = range(len(w))
+    for sp in mag:
+        plt.plot(x, sp, 'o')
+    plt.plot(x, r_mag, 'ko')
+
 
 def make_learning_movie(movie_path, out_string):
     
@@ -406,7 +424,6 @@ def plot_value_functions(size, m, b):
     plt.clf()
     f = plt.figure()
     
-    # todo something wrong with model vf?
     # true model value fn
     ax = f.add_subplot(311)
     ax.imshow(numpy.reshape(m.V, (size, size)), cmap = 'gray', interpolation = 'nearest')
