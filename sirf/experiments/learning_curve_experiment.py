@@ -73,7 +73,8 @@ def main(workers = 0,
          min_imp = 0.0002,
          min_delta = 1e-6,
          fldir = '/scratch/cluster/ccor/feature-learning/',
-         movie = False
+         movie = False,
+         req_rew = True,
          ):
 
     beta_ratio = beta/gam 
@@ -81,8 +82,8 @@ def main(workers = 0,
     if training_methods is None:
         training_methods = [
             (['prediction'],[['theta-all']]),
-            (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
-            (['layered'], [['theta-all', 'w']]) # baseline
+            #(['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
+            #(['layered'], [['theta-all', 'w']]) # baseline
             ]     
 
     print 'building environment'
@@ -103,7 +104,7 @@ def main(workers = 0,
         print 'sampling from a grid world'
         # currently defaults to on-policy sampling
         
-        kw = dict(n_samples = n_samples, encoder = encoder) 
+        kw = dict(n_samples = n_samples, encoder = encoder, req_rew = req_rew) 
         R, X, _ = mdp.sample_encoding(**kw)
         R_val, X_val, _ = mdp.sample_encoding(**kw)
         R_test, X_test, _ = mdp.sample_encoding(**kw)
@@ -204,16 +205,17 @@ def train_basis(basis_params, basis_dict, method, model, losses, encoder, S, R,
     basis = BellmanBasis(*basis_params, **basis_dict)
 
     def record_loss(d_loss):
+
         # record losses with test set
         for loss, arr in d_loss.items():
             if loss == 'test-training':
                 val = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew)
             elif loss == 'test-bellman':
-                val = basis.loss_be(basis.params, S_val, R_val, Mphi, Mrew)
+                val = basis.loss_be(*(basis.params + [S_test, R_test, Mphi, Mrew]))
             elif loss == 'test-reward':
-                val = basis.loss_r(basis.params, S_val, R_val, Mphi, Mrew)
+                val = basis.loss_r(*(basis.params + [S_test, R_test, Mphi, Mrew]))
             elif loss == 'test-model':
-                val = basis.loss_m(basis.params, S_val, R_val, Mphi, Mrew)
+                val = basis.loss_m(*(basis.params + [S_test, R_test, Mphi, Mrew]))
             elif loss == 'true-bellman':
                 val = model.bellman_error(IM, weighting = weighting)
             elif loss == 'true-reward':
@@ -322,13 +324,14 @@ def train_basis(basis_params, basis_dict, method, model, losses, encoder, S, R,
     plt.savefig(fl_dir + 'sirf/output/plots/basis0' + out_string + '.pdf')
     
     # plot learning curves
-    plot_learning_curves(d_loss, switch)
-    plt.savefig(fl_dir + 'sirf/output/plots/loss' + out_string + '.pdf')
+    plot_learning_curves(d_loss, switch, filt = 'test')
+    plt.savefig(fl_dir + 'sirf/output/plots/test_loss' + out_string + '.pdf')
+    plot_learning_curves(d_loss, switch, filt = 'true')
+    plt.savefig(fl_dir + 'sirf/output/plots/true_loss' + out_string + '.pdf')    
     
     # plot value functions
     plot_value_functions(env_size, model, IM)
     plt.savefig(fl_dir + 'sirf/output/plots/value' + out_string + '.pdf')
-
 
     # plot spectrum of reward and features
     gen_spectrum(IM, model.P, model.R)
@@ -372,27 +375,22 @@ def make_learning_movie(movie_path, out_string):
     #os.system("ffmpeg -qscale 2 -r 4 -b 10M  -i %simg_%03d.png  %slearning_mov.%s.mp4" % (movie_path, movie_path, out_string))
     #os.system("mencoder %s -mf type=png:fps=10 -ovc lavc -lavcopts vcodec=wmv2 -oac copy -o animation.mpg" % path)
 
-def plot_learning_curves(d_loss, switch):
+def plot_learning_curves(d_loss, switch, filt = ''):
     plt.clf()
     ax = plt.axes()
-    #mx = 0
     for name, curve in d_loss.items():
-        print 'plotting %s curve' % name
-        x = range(len(curve))
-        #ax.semilogy(x, curve, label = name)
-        if name == 'test-training':        
-            ax.plot(x, curve/curve.mean(), label = name)
-        else:
+        if filt in name:
+            x = range(len(curve))
             ax.plot(x, curve, label = name)
-       # mx = max(mx, numpy.max(curve))
-     
+    
     if len(switch) > 1:
         for i in xrange(len(switch)-1):
             ax.plot([switch[i], switch[i]], [0, 1], 'k--', label = 'training switch')
+        
     plt.title('Losses per CG Minibatch')
-    #ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    #plt.ylim(0, 2.)
-    ax.legend()
+    if ylim is not None:
+        plt.ylim(0, 2.)
+    ax.legend() #ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
 
 def _plot_features(phi, r = None, c = None, vmin = None, vmax = None):
     plt.clf()
