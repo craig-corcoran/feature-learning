@@ -19,7 +19,7 @@ class BellmanBasis:
     def __init__(self, n, ks, beta, alpha = 1., thetas = None, w = None, reg_tuple = None,
                  nonlin = None, nonzero = None, shift = 1e-6, input_bias = True):
         
-        self.n = n - 1 if input_bias else n # dim of input data 
+        self.n = n - 1 if input_bias else n # dim of input data TODO test when input_bias is false
         self.ks = ks # num of hidden layer features
         self.nonzero = nonzero  # set this to some positive float to penalize zero theta vectors.
         self.shift = shift # prevent singular matrix inversion with this pseudoinverse scalar.
