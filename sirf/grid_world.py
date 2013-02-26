@@ -304,13 +304,17 @@ class MDP:
         
         return rewards, states, actions
 
-    def sample_encoding(self, n_samples, encoder): # require reward?
+    def sample_encoding(self, n_samples, encoder, req_rew = False): # require reward?
         ''' returns samples from the grid world mdp
         using encoding for the features and sampling from the mdp's policy. 
         samples are returned in the order rew, state, act. actions currently 
         not encoded beyond tabular'''
-
+        
         rewards, states, actions = self.sample_policy(n_samples)
+        if req_rew:
+            while sum(rewards) == 0:
+                rewards, states, actions = self.sample_policy(n_samples)
+            
         
         col_s = [self.env.state_to_index(s) for s in states]
         col_a = [self.env.action_to_index[tuple(a)] for a in actions]
