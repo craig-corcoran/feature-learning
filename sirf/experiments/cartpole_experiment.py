@@ -6,7 +6,6 @@ import re
 import scipy.optimize
 import scipy.sparse
 import sirf
-import theano
 import matplotlib.pyplot as plt
 
 logger = sirf.get_logger(__name__)
