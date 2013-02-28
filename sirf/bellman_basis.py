@@ -136,6 +136,14 @@ class BellmanBasis:
     def theano_vars(self):
         return self.params_t + [self.S_t, self.Rfull_t, self.Mphi_t, self.Mrew_t]
 
+    def estimated_value(self, state):
+        '''Compute the estimated value of a given world state.'''
+        def bias(z):
+            if len(z.shape) == 1:
+                z = z.reshape((1, len(z)))
+            return numpy.hstack([z, numpy.ones((len(z), 1))]) # what if S is sparse? xxx
+        return numpy.dot(bias(self.encode(state)), self.w)
+
     def compile_loss(self, loss):
         kw = dict(on_unused_input='ignore')
         loss_t = getattr(self, '%s_funcs' % loss)()
