@@ -115,10 +115,8 @@ def main(ks = 16,
     losses['true-bellman'] = []
     losses['policy'] = []
     def trace():
-        #Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(16384, **kw)
-        #S_be, R_be = sample(16384)
-        Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(1024, **kw)
-        S_be, R_be = sample(1024)
+        Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(16384, **kw)
+        S_be, R_be = sample(16384)
         loss = bb.loss_be(*(bb.params + [S_be, R_be, Mphi_be, Mrew_be]))
         logger.info('loss true-bellman: %s', loss)
         losses['true-bellman'].append(loss)
