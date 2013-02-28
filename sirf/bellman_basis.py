@@ -19,7 +19,7 @@ class BellmanBasis:
     def __init__(self, n, ks, beta, alpha = 1., thetas = None, w = None, reg_tuple = None,
                  nonlin = None, nonzero = None, shift = 1e-6, input_bias = True):
         
-        self.n = n - 1 if input_bias else n # dim of input data (not including bias)
+        self.n = n - 1 if input_bias else n # dim of input data TODO test when input_bias is false
         self.ks = ks # num of hidden layer features
         self.nonzero = nonzero  # set this to some positive float to penalize zero theta vectors.
         self.shift = shift # prevent singular matrix inversion with this pseudoinverse scalar.
@@ -83,8 +83,8 @@ class BellmanBasis:
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T
         self.Z_t = TT.concatenate([self.Rlam_t, self.PHIlam_t], axis=1)
 
-        self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + TS.square_diagonal(TT.ones((self.k, )) * self.shift)
-        self.cov_inv = TL.matrix_inverse(self.cov) # l2 reg to avoid sing matrix
+        self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + self.shift * TT.eye(self.k)
+        self.cov_inv = TL.matrix_inverse(self.cov) # l2 reg to avoid singular matrix
 
         # precompile theano functions and gradients.
         self.losses = dict(zip(self.LOSSES, [self.compile_loss(lo) for lo in self.LOSSES]))
@@ -210,8 +210,8 @@ class BellmanBasis:
 
     def model_funcs(self):
         # model loss: ||PHI0 (PHI0.T * PHI0)^-1 PHI0.T * PHIlam - PHIlam||
-        bb = TT.dot(self.PHI0_t.T, self.PHIlam_t) # TODO append constant features here?
-        w_m = TT.dot(self.cov_inv, bb) # least squares weight matrix
+        b = TT.dot(self.PHI0_t.T, self.PHIlam_t) # TODO append constant features here?
+        w_m = TT.dot(self.cov_inv, b) # least squares weight matrix
         return TT.sqrt(TT.sum(TT.sqr(self.PHIlam_t - TT.dot(self.PHI0_t, w_m)))) # frobenius norm
 
     def covariance_funcs(self):
@@ -406,7 +406,7 @@ def plot_features(phi, r = None, c = None, vmin = None, vmax = None):
 def _stack_feature_row(phi_slice, r, c):
     for i in xrange(phi_slice.shape[1]):
         im = numpy.reshape(phi_slice[:,i], (r,c))
-        I = numpy.zeros((r+2,c+2)) # pad with white value
+        I = numpy.zeros((r+2,c+2)) # pad with zeros
         I[1:-1,1:-1] = im
         if i == 0:
             F = I

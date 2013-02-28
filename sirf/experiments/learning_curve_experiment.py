@@ -4,7 +4,7 @@ import numpy
 import pickle
 import plac
 import scipy.optimize
-import scipy.sparse
+import scipy.sparse as sp
 import theano
 import matplotlib.pyplot as plt
 
@@ -13,6 +13,7 @@ import sirf
 import sirf.grid_world as grid_world
 import sirf.util as util
 from sirf.rl import Model
+from sirf.encoding import TabularFeatures, TileFeatures
 from sirf.bellman_basis import plot_features, BellmanBasis 
 
 # mark  best theta
@@ -52,12 +53,12 @@ logger = sirf.get_logger(__name__)
     )
 def main(workers = 0,
          k = 36,
-         encoding = 'square-tile',
-         env_size = 15,
+         encoding = 'tile',
+         env_size = 9,
          n_runs = 1,
          lam = 0.,
-         gam = 0.999,
-         beta = 0.999,
+         gam = 0.995,
+         beta = 0.995,
          alpha = 1.,
          eps = 1e-5, 
          patience = 15,
@@ -69,10 +70,11 @@ def main(workers = 0,
          nonlin = None,
          nonzero = None,
          training_methods = None,
-         min_imp = 0.0001,
+         min_imp = 0.0002,
          min_delta = 1e-6,
          fldir = '/scratch/cluster/ccor/feature-learning/',
-         movie = False
+         movie = False,
+         req_rew = True,
          ):
 
     beta_ratio = beta/gam 
@@ -81,53 +83,54 @@ def main(workers = 0,
         training_methods = [
             (['prediction'],[['theta-all']]),
             #(['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
-            #(['covariance'],[['theta-all']]), # with reward, without fine-tuning
-            #(['covariance', 'layered'], [['theta-all'],['theta-all','w']]), 
             #(['layered'], [['theta-all', 'w']]) # baseline
-            ]    
+            ]     
 
     print 'building environment'
     mdp = grid_world.MDP(walls_on = True, size = env_size)
     n_states = env_size**2
 
     m = Model(mdp.env.R, mdp.env.P, gam = gam)
+    
+    # constant appended in encoder by default
+    if encoding is 'tabular':
+        encoder = TabularFeatures(env_size, append_const = True)
+    elif encoding is 'tile':
+        encoder = TileFeatures(env_size, append_const = True)
+    elif encoding is 'factored':
+        raise NotImplementedError
 
     if n_samples:
         print 'sampling from a grid world'
         # currently defaults to on-policy sampling
         
-        kw = dict(n_samples = n_samples, encoding = encoding, append_const = True) 
+        kw = dict(n_samples = n_samples, encoder = encoder, req_rew = req_rew) 
         R, X, _ = mdp.sample_encoding(**kw)
         R_val, X_val, _ = mdp.sample_encoding(**kw)
         R_test, X_test, _ = mdp.sample_encoding(**kw)
-        losses = ['test-bellman', 'test-reward', 'test-model', 'true-bellman', 'true-lsq']
+        losses = ['test-bellman', 'test-reward',  'test-model', 'true-bellman', 'true-lsq'] 
+        #losses =  ['true-bellman', 'true-reward', 'true-model']
         weighting = 'policy'
        
     else:
         print 'using perfect information'
+        # gen stacked matrices of I, P, P^2, ...
         R = numpy.array([])
-        S = scipy.sparse.eye(n_states, n_states)
-        P = scipy.sparse.eye(n_states, n_states)
+        S = sp.eye(n_states, n_states)
+        P = sp.eye(n_states, n_states)
         for i in xrange(BellmanBasis._calc_n_steps(lam, gam, eps)): # decay epsilon 
             R = numpy.append(R, P * m.R)
             P = m.P * P
-            S = scipy.sparse.vstack((S, P))
+            S = sp.vstack((S, P))
         
-        if encoding == 'tabular':
-            print 'encoding used: ', encoding
-            X = S
-        elif encoding == 'factored':
-            raise NotImplementedError 
-        elif encoding == 'square-tile':
-            print 'encoding used: ', encoding
-            X = mdp.tiles.encode(S)
-            
-        R = R[:,None]
-        #X = scipy.sparse.hstack((X, numpy.ones((X.shape[0],1)))) # TODO move to grid_world/tabular feature class
+        X = encoder.encode(S)   
+        R = sp.csr_matrix(R[:,None])
         X_val = X_test = X
         R_val = R_test = R
         losses =  ['true-bellman', 'true-reward', 'true-model'] #, 'test-training'] #, 'true-lsq']
         weighting = 'uniform'
+    
+    print 'data type: ', type(X), type(R)
 
     # build bellman operator matrices
     print 'making mixing matrices'
@@ -173,17 +176,17 @@ def main(workers = 0,
                 '.samples=%d' % n_samples if n_samples else '',
                 '.nonlin=%s' % nonlin if nonlin else '')
 
-            yield (train_basis, [bb_params, bb_dict, tm, m, losses, X, R,  
+            yield (train_basis, [bb_params, bb_dict, tm, m, losses, encoder, X, R,  
                 X_val, R_val, X_test, R_test, Mphi, Mrew, patience, max_iter, 
-            weighting, out_string, min_imp, min_delta, env_size, fldir, mdp.tiles, movie])
+            weighting, out_string, min_imp, min_delta, env_size, fldir, movie])
 
     # launch condor jobs
     for _ in condor.do(yield_jobs(), workers):
         pass
 
-def train_basis(basis_params, basis_dict, method, model, losses, S, R,  
+def train_basis(basis_params, basis_dict, method, model, losses, encoder, S, R,  
             S_val, R_val, S_test, R_test, Mphi, Mrew, patience, max_iter, 
-            weighting, out_string, min_imp, min_delta, env_size, fl_dir, tiles, movie):
+            weighting, out_string, min_imp, min_delta, env_size, fl_dir, movie):
 
     print 'training basis using training method: ', str(method)
 
@@ -202,16 +205,17 @@ def train_basis(basis_params, basis_dict, method, model, losses, S, R,
     basis = BellmanBasis(*basis_params, **basis_dict)
 
     def record_loss(d_loss):
+
         # record losses with test set
         for loss, arr in d_loss.items():
             if loss == 'test-training':
                 val = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew)
             elif loss == 'test-bellman':
-                val = basis.loss_be(basis.params, S_val, R_val, Mphi, Mrew)
+                val = basis.loss_be(*(basis.params + [S_test, R_test, Mphi, Mrew]))
             elif loss == 'test-reward':
-                val = basis.loss_r(basis.params, S_val, R_val, Mphi, Mrew)
+                val = basis.loss_r(*(basis.params + [S_test, R_test, Mphi, Mrew]))
             elif loss == 'test-model':
-                val = basis.loss_m(basis.params, S_val, R_val, Mphi, Mrew)
+                val = basis.loss_m(*(basis.params + [S_test, R_test, Mphi, Mrew]))
             elif loss == 'true-bellman':
                 val = model.bellman_error(IM, weighting = weighting)
             elif loss == 'true-reward':
@@ -292,7 +296,7 @@ def train_basis(basis_params, basis_dict, method, model, losses, S, R,
                 # check reward loss gradient
                 #print 'norm of reward prediction gradient: ', numpy.linalg.norm(
                     #basis.grad_rew_pred(basis.flat_params, S, R, Mphi, Mrew))
-                IM = tiles.weights_to_basis(basis.thetas[-1])
+                IM = encoder.weights_to_basis(basis.thetas[-1])
                 d_loss = record_loss(d_loss)
 
 
@@ -303,7 +307,7 @@ def train_basis(basis_params, basis_dict, method, model, losses, S, R,
         switch.append(it-1)
     
     sparse_eps = 1e-5
-    IM = tiles.weights_to_basis(basis.thetas[-1])
+    IM = encoder.weights_to_basis(basis.thetas[-1])
     print 'final test bellman error: ', model.bellman_error(IM, weighting = weighting)
     print 'final sparsity: ', [(numpy.sum(abs(th) < sparse_eps) / float(len(th.flatten()))) for th in basis.params]
 
@@ -312,7 +316,6 @@ def train_basis(basis_params, basis_dict, method, model, losses, S, R,
         pickle.dump(d_loss, out_file, protocol = -1)
 
     # plot basis functions
-    IM = tiles.weights_to_basis(basis.thetas[-1]) # TODOs generalize
     plot_features(IM[:, :36])
     plt.savefig(fl_dir + 'sirf/output/plots/basis' + out_string+ '.pdf')
 
@@ -321,18 +324,46 @@ def train_basis(basis_params, basis_dict, method, model, losses, S, R,
     plt.savefig(fl_dir + 'sirf/output/plots/basis0' + out_string + '.pdf')
     
     # plot learning curves
-    plot_learning_curves(d_loss, switch)
-    plt.savefig(fl_dir + 'sirf/output/plots/loss' + out_string + '.pdf')
+    plot_learning_curves(d_loss, switch, filt = 'test')
+    plt.savefig(fl_dir + 'sirf/output/plots/test_loss' + out_string + '.pdf')
+    plot_learning_curves(d_loss, switch, filt = 'true')
+    plt.savefig(fl_dir + 'sirf/output/plots/true_loss' + out_string + '.pdf')    
     
     # plot value functions
     plot_value_functions(env_size, model, IM)
     plt.savefig(fl_dir + 'sirf/output/plots/value' + out_string + '.pdf')
 
+    # plot spectrum of reward and features
+    gen_spectrum(IM, model.P, model.R)
+    plt.savefig(fl_dir + 'sirf/output/plots/spectrum' + out_string + '.pdf')
 
     # make movie from basis files saved
     #make_learning_movie(movie_path, out_string)
 
     #return basis, d_loss
+
+def gen_spectrum(Inp, P, R):
+    plt.clf()
+    Inp /= numpy.sqrt((Inp * Inp).sum(axis=0))
+    R = R
+    w,v = numpy.linalg.eig( P )#- beta * numpy.eye(m.P.shape[0]))
+    v = v[:, numpy.argsort(abs(w))[::-1]]
+    v = numpy.real(v)
+    mag = abs(numpy.dot(Inp.T, v))
+    r_mag = abs(numpy.dot(R.T, v))
+    
+    order = numpy.argsort(r_mag)[::-1]
+    mag = mag[:, order]
+    r_mag = r_mag[:, order]
+
+    #r_mag = r_mag[r_mag > 1e-10] 
+    
+    # plot feature spectrums
+    x = range(len(w))
+    for sp in mag:
+        plt.semilogy(x, sp, '.')
+    plt.semilogy(range(len(r_mag)), r_mag, 'ko')
+    plt.ylim(1e-6, 1)
 
 def make_learning_movie(movie_path, out_string):
     
@@ -344,49 +375,22 @@ def make_learning_movie(movie_path, out_string):
     #os.system("ffmpeg -qscale 2 -r 4 -b 10M  -i %simg_%03d.png  %slearning_mov.%s.mp4" % (movie_path, movie_path, out_string))
     #os.system("mencoder %s -mf type=png:fps=10 -ovc lavc -lavcopts vcodec=wmv2 -oac copy -o animation.mpg" % path)
 
-def plot_learning_curves(d_loss, switch):
+def plot_learning_curves(d_loss, switch, filt = ''):
     plt.clf()
     ax = plt.axes()
-    #mx = 0
     for name, curve in d_loss.items():
-        print 'plotting %s curve' % name
-        x = range(len(curve))
-        #ax.semilogy(x, curve, label = name)
-        if name == 'test-training':        
-            ax.plot(x, curve/curve.mean(), label = name)
-        else:
+        if filt in name:
+            x = range(len(curve))
             ax.plot(x, curve, label = name)
-       # mx = max(mx, numpy.max(curve))
-     
+    
     if len(switch) > 1:
         for i in xrange(len(switch)-1):
             ax.plot([switch[i], switch[i]], [0, 1], 'k--', label = 'training switch')
+        
     plt.title('Losses per CG Minibatch')
-    #ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    #plt.ylim(0, 2.)
-    ax.legend()
-
-#def _plot_features(phi, r = None, c = None):
-    #plt.clf()
-    #j,k = phi.shape
-    #if r is None:
-        #r = c = numpy.round(numpy.sqrt(j))
-        #assert r*c == j
-        
-    #m = numpy.floor(numpy.sqrt(k))
-    #n = numpy.ceil(k/float(m))
-    #assert m*n >= k 
-
-    #f = plt.figure()
-    #for i in xrange(k):
-        
-        #u = numpy.floor(i / m) 
-        #v = i % n
-        
-        #im = numpy.reshape(phi[:,i], (r,c))
-        #ax = f.add_axes([float(u)/m, float(v)/n, 1./m, 1./n])
-        #ax.imshow(im, cmap = 'RdBu', interpolation = 'nearest')
-        #plt.axis('off')
+    if ylim is not None:
+        plt.ylim(0, 2.)
+    ax.legend() #ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
 
 def _plot_features(phi, r = None, c = None, vmin = None, vmax = None):
     plt.clf()
@@ -415,7 +419,6 @@ def plot_value_functions(size, m, IM):
     plt.clf()
     f = plt.figure()
     
-    # todo something wrong with model vf?
     # true model value fn
     ax = f.add_subplot(311)
     ax.imshow(numpy.reshape(m.V, (size, size)), cmap = 'gray', interpolation = 'nearest')
@@ -424,7 +427,7 @@ def plot_value_functions(size, m, IM):
 
     # bellman error estimate (using true model)
     ax = f.add_subplot(312)
-    w_be = m.get_lstd_weights(IM) # TODO add lambda parameter here
+    w_be = m.get_lstd_weights(IM) # todo add lambda parameter here
     v_be = numpy.dot(IM, w_be)
     ax.imshow(numpy.reshape(v_be, (size, size)), cmap = 'gray', interpolation = 'nearest')
     ax.set_xticks([])
