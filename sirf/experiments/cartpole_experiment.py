@@ -49,6 +49,7 @@ def sample(n):
     nonzero=('penalty for zero theta vectors', 'option', None, float),
     method=('training method', 'option', None, int),
     output=('save results in this file', 'option', None, str),
+    trace_every=('trace every N iterations', 'option', None, int),
     )
 def main(ks = 16,
          lam = 0.,
@@ -65,6 +66,7 @@ def main(ks = 16,
          nonzero = None,
          method = 0,
          output = None,
+         trace_every = 3,
          ):
     n = 4
 
@@ -83,7 +85,7 @@ def main(ks = 16,
     if l1code is not None:
         reg = ('l1-code', l1code)
 
-    bb = sirf.BellmanBasis(n, [int(k) for k in re.findall(r'\d+', str(ks))],
+    bb = sirf.BellmanBasis(n + 1, [int(k) for k in re.findall(r'\d+', str(ks))],
                            beta = beta / gam,
                            reg_tuple = reg,
                            nonlin = nonlin,
@@ -99,9 +101,6 @@ def main(ks = 16,
     S_valid, R_valid = sample(1024)
     S_test, R_test = sample(1024)
 
-    Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(16384, **kw)
-    S_be, R_be = sample(16384)
-
     logger.info('training with %i samples and %s method', S.shape[0], method)
     loss_list, wrt_list = method
     assert len(loss_list.split()) == len(wrt_list)
@@ -110,36 +109,65 @@ def main(ks = 16,
         ('test-bellman', bb.loss_be, S_test, R_test, Mphi_test, Mrew_test),
         ('test-reward', bb.loss_r, S_test, R_test, Mphi_test, Mrew_test),
         ('test-model', bb.loss_m, S_test, R_test, Mphi_test, Mrew_test),
-        ('true-bellman', bb.loss_be, S_be, R_be, Mphi_be, Mrew_be),
         )
 
-    losses = {r[0]: [] for r in recordable}
+    losses = dict((r[0], []) for r in recordable)
+    losses['true-bellman'] = []
+    losses['policy'] = []
     def trace():
+        #Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(16384, **kw)
+        #S_be, R_be = sample(16384)
+        Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(1024, **kw)
+        S_be, R_be = sample(1024)
+        loss = bb.loss_be(*(bb.params + [S_be, R_be, Mphi_be, Mrew_be]))
+        logger.info('loss true-bellman: %s', loss)
+        losses['true-bellman'].append(loss)
+
+        w = sirf.CartPole()
+        p = sirf.ValuePolicy(get_value = bb.estimated_value)
+        n = 1000
+        e = 0
+        while n > 0:
+            trace = w.single_episode(p)
+            e += 1
+            n -= len(trace)
+        logger.info('loss policy: %s', -e)
+        losses['policy'].append(-e)
+
         for key, func, s, r, phi, rew in recordable:
             loss = func(*(bb.params + [s, r, phi, rew]))
             logger.info('loss %s: %s', key, loss)
             losses[key].append(loss)
 
+    bb.set_loss('layered', ['w'])
+    bb.set_params(scipy.optimize.fmin_cg(
+            bb.loss, bb.flat_params, bb.grad,
+            args = (S, R, Mphi, Mrew),
+            full_output = False,
+            maxiter = max_iter,
+            ))
+
+    it = 0
     for loss, wrt in zip(loss_list.split(), wrt_list):
-        bb.set_loss(loss, wrt.split())
         best_test_loss = 1e10
         best_params = None
         waiting = 0
 
-        trace()
-
         try:
-            it = 0
             while waiting < patience:
+                if not it % trace_every:
+                    trace()
                 it += 1
                 logger.info('** iteration %d', it)
 
-                bb.set_params(scipy.optimize.fmin_cg(
-                        bb.loss, bb.flat_params, bb.grad,
-                        args = (S, R, Mphi, Mrew),
-                        full_output = False,
-                        maxiter = max_iter,
-                        ))
+                for loss_, wrt_ in ((loss, wrt.split()), ('layered', ['w'])):
+                    bb.set_loss(loss_, wrt_)
+                    bb.set_params(scipy.optimize.fmin_cg(
+                            bb.loss, bb.flat_params, bb.grad,
+                            args = (S, R, Mphi, Mrew),
+                            full_output = False,
+                            maxiter = max_iter,
+                            ))
 
                 err = bb.loss(bb.flat_params, S_valid, R_valid, Mphi_test, Mrew_test)
                 if (best_test_loss - err) / best_test_loss > min_imp:
@@ -152,9 +180,6 @@ def main(ks = 16,
                 else:
                     waiting += 1
                     logger.info('iters without better %s loss: %s', bb.loss_type, waiting)
-
-                if not it % 3:
-                    trace()
 
             bb.params = best_params
         except KeyboardInterrupt:
