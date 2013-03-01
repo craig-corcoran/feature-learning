@@ -243,11 +243,16 @@ class BellmanBasis:
         B = TS.structured_dot(self.Alpha_t, A.T).T
         return TT.sqrt(TT.sum(TT.sqr(B))) # frobenius norm
 
-    def value_prediction_funcs(self):
+    def value_prediction_funcs(self, norm_cols = False):
         
-        q = TT.dot(self.PHIlam_t, self.w_t[:-1])
+        q = TT.dot(self.PHIlamc_t, self.w_t)
+        r = self.Rlam_t
+        if norm_cols:
+            q = TT.true_div(q,  TT.sqrt(TT.sum(TT.sqr(q))))
+            r = TT.true_div(self.Rlam_t,  TT.sqrt(TT.sum(TT.sqr(self.Rlam_t))))
+            
         q_err = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, q)) - q
-        r_err = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, self.Rlam_t)) - self.Rlam_t
+        r_err = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, r)) - r
         return TT.sum(TT.abs_(q_err)) + TT.sum(TT.abs_(r_err)) # currently no relative weighting
 
     

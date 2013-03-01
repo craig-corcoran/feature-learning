@@ -249,6 +249,7 @@ def main(workers = 0,
     plot_aggregate_data(n_samples, d_loss_data, labels)
     plot_path = out_string(out_dir, 'plots/%s_results' % 
                             ('n_samples' if n_samples else 'full_info'), '.pdf')
+    plt.gcf().set_size_inches(16, 12)
     plt.savefig(plot_path) 
 
 #def out_string(pref, root, suff = ''):
@@ -296,7 +297,7 @@ def plot_aggregate_data(n_samples, d_loss_data, labels):
             ax.plot(x, mn, label = lb)
             plt.title(key)
             plt.axis('off')
-            plt.legend() # lower left
+            #plt.legend() # lower left
 
 
 def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses, 
