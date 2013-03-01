@@ -7,7 +7,7 @@ cat > cartpole.condor <<EOF
 
 universe = vanilla
 notification = complete
-requirements = (InMastodon == false) && (Memory >= 1024) && (Arch == "X86_64")
+requirements = (InMastodon == false) && (Memory >= 2000) && (Arch == "X86_64")
 rank = KFlops
 getenv = True
 executable = cartpole-experiment.sh
@@ -15,20 +15,21 @@ log = cartpole-experiment.log
 initialdir = $(pwd)
 EOF
 
-for m in 0 1 3
+mkdir -p cartpole
+
+for m in 5 6 #0 1 2 3 4
 do
-for n in 16 32 64 128 256
+for n in 32 64 128 256 512
 do
-mkdir -p cartpole/$n
-for g in linear sigmoid relu
+for g in linear sigmoid
 do
-for k in 64 256,64 256,256,64
+for k in 16 64,16 #256,64,16
 do
 cat >> cartpole.condor <<EOF
-arguments = -ks $k -nonlin $g -n-samples $n -method $m -output cartpole/$n/cartpole-\$(Process)
-output = cartpole/$n/experiment-n$n-m$m-g$g-k$k.\$(Process).out
-error = cartpole/$n/experiment-n$n-m$m-g$g-k$k.\$(Process).err
-Queue 5
+arguments = -ks $k -nonlin $g -n-samples $n -method $m -output cartpole/cartpole-\$(Process)
+output = cartpole/experiment-n$n-m$m-g$g-k$k.\$(Process).out
+error = cartpole/experiment-n$n-m$m-g$g-k$k.\$(Process).err
+Queue 10
 EOF
 done
 done
