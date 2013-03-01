@@ -14,7 +14,7 @@ logger = sirf.get_logger(__name__)
 
 class BellmanBasis:
 
-    LOSSES = 'bellman layered model reward covariance prediction rew_prediction nonzero l2code l1code l1theta'.split()
+    LOSSES = 'bellman layered model fullmodel reward covariance prediction rew_prediction nonzero l2code l1code l1theta'.split()
 
     def __init__(self, n, ks, beta, alpha = 1., thetas = None, w = None, reg_tuple = None,
                  nonlin = None, nonzero = None, shift = 1e-6, input_bias = True):
@@ -91,8 +91,8 @@ class BellmanBasis:
         a = TT.dot(self.PHI0c_t.T, self.A_t) + TT.eye(self.k + 1) * self.shift
         self.w_lstd_t = TT.dot(TL.matrix_inverse(a), self.b_t) # includes bias param
 
-        self.cov = TT.dot(self.PHI0c_t.T, self.PHI0c_t) + self.shift * TT.eye(self.k) # also includes bias
-        self.cov_inv = TL.matrix_inverse(self.cov) # l2 reg to avoid singular matrix
+        self.cov_t = TT.dot(self.PHI0c_t.T, self.PHI0c_t) + self.shift * TT.eye(self.k) # also includes bias
+        self.cov_inv_t = TL.matrix_inverse(self.cov_t) # l2 reg to avoid singular matrix
 
         # precompile theano functions and gradients.
         self.losses = dict(zip(self.LOSSES, [self.compile_loss(lo) for lo in self.LOSSES]))
@@ -123,6 +123,10 @@ class BellmanBasis:
     @property
     def loss_m(self):
         return self.losses['model'][0]
+
+    @property
+    def loss_fm(self):
+        return self.losses['fullmodel'][0]
 
     @property
     def w(self):
@@ -198,29 +202,29 @@ class BellmanBasis:
         ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
         
-        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.deltPHIc_t, self.w_lstd))))
+        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.A_t, self.w_lstd_t))))
 
     def layered_funcs(self):    
         ''' uses self.w_t when measuring loss'''
         # append const feature
-        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.deltPHIc_t, self.w_t))))
+        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.A_t, self.w_t))))
 
     def reward_funcs(self):
         # reward loss: ||(PHI0 (PHI0.T * PHI0))^-1 PHI0.T * Rlam - Rlam||
-        w_r = TT.dot(self.cov_inv, self.b_t)
+        w_r = TT.dot(self.cov_inv_t, self.b_t)
         return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.PHI0c_t, w_r)))) # frobenius norm
 
     def fullmodel_funcs(self):
         # model loss: ||PHI0 (PHI0.T * PHI0)^-1 PHI0.T * PHIlam - PHIlam||
-        B = TT.dot(self.PHI0c_t.T, self.PHIlam_t) # TODO append constant features here?
-        W_m = TT.dot(self.cov_inv, B) # least squares weight matrix
+        B = TT.dot(self.PHI0c_t.T, self.PHIlam_t) 
+        W_m = TT.dot(self.cov_inv_t, B) # least squares weight matrix
         return TT.sqrt(TT.sum(TT.sqr(self.PHIlam_t - TT.dot(self.PHI0c_t, W_m)))) # frobenius norm
 
     def model_funcs(self):
         
-        q = TT.dot(self.PHIlamc_t, self.w_lstd)
+        q = TT.dot(self.PHIlamc_t, self.w_lstd_t)
         b = TT.dot(self.PHI0c_t.T, q)
-        w_m = TT.dot(self.cov_inv, b) # least squares weight matrix
+        w_m = TT.dot(self.cov_inv_t, b) # least squares weight matrix
         return TT.sqrt(TT.sum(TT.sqr(q - TT.dot(self.PHI0c_t, w_m)))) # frobenius norm
 
     def covariance_funcs(self):

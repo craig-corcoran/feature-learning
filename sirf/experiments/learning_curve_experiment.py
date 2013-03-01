@@ -92,11 +92,14 @@ def main(workers = 0,
         training_methods = [
             (['prediction'],[['theta-all']]),
             (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
-            (['layered'], [['theta-all', 'w']]) # baseline
+            (['covariance'], [['theta-all']]),
+            (['covariance', 'layered'], [['theta-all'],['theta-all','w']]),
+            (['layered'], [['theta-all', 'w']]), # baseline
             ]  
 
-    losses = ['test-bellman', 'test-reward',  'test-model', 'true-bellman',
-                'true-reward', 'true-model', 'true-lsq'] if n_samples else \
+    losses = ['test-bellman', 'test-reward',  'test-model', 'test-fullmodel',
+              'true-bellman', 'true-reward', 'true-model', 'true-lsq'] \
+                if n_samples else \
              ['true-bellman', 'true-reward', 'true-model'] 
 
     logger.info('building environment of size %i' % env_size)
@@ -307,6 +310,8 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
                 val = basis.loss_r(*(basis.params + [S_test, R_test, Mphi, Mrew]))
             elif loss == 'test-model':
                 val = basis.loss_m(*(basis.params + [S_test, R_test, Mphi, Mrew]))
+            elif loss == 'test-fullmodel':
+                val = basis.loss_fm(*(basis.params + [S_test, R_test, Mphi, Mrew]))
             elif loss == 'true-bellman':
                 val = model.bellman_error(IM, weighting = weighting)
             elif loss == 'true-reward':
@@ -326,10 +331,18 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
     it = 0
     IM = encoder.weights_to_basis(basis.thetas[-1])
     d_loss_learning = record_loss(d_loss_learning)
-    for i,loss in enumerate(loss_list):
-        
-        basis.set_loss(loss, wrt_list[i])
     
+    # train once on w to initialize
+    basis.set_loss('layered', ['w'])
+    basis.set_params(scipy.optimize.fmin_cg(
+            basis.loss, basis.flat_params, basis.grad,
+            args = (S, R, Mphi, Mrew),
+            full_output = False,
+            maxiter = max_iter,
+            ))
+
+    for loss, wrt in zip(loss_list.split(), wrt_list):
+        
         waiting = 0
         best_params = None
         best_test_loss = 1e20
@@ -352,6 +365,15 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
                     # record learning movie frame
                     plot_features(basis.thetas[-1][:-1], vmin = vmin, vmax = vmax)
                     plt.savefig(fl_dir + 'sirf/output/plots/movie/img_%03d.png' % it)
+
+                for loss_, wrt_ in ((loss, wrt.split()), ('layered', ['w'])):
+                    basis.set_loss(loss_, wrt_)
+                    basis.set_params(scipy.optimize.fmin_cg(
+                            basis.loss, basis.flat_params, basis.grad,
+                            args = (S, R, Mphi, Mrew),
+                            full_output = False,
+                            maxiter = max_iter,
+                            ))
 
                 old_params = copy.deepcopy(basis.flat_params)
                 basis.set_params( vec = scipy.optimize.fmin_cg(basis.loss, basis.flat_params, basis.grad,
