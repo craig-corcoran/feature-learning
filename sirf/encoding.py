@@ -4,8 +4,11 @@ import matplotlib.pyplot as plt
 from itertools import izip
 from plotting import plot_features
 import grid_world
+import sirf
 
 # assumes square env
+
+logger = sirf.get_logger(__name__)
 
 class TabularFeatures():
     
@@ -54,23 +57,21 @@ class TileFeatures(TabularFeatures):
                     self.B = flat_im if ind is 0 else numpy.hstack([self.B, flat_im])
                     ind += 1
         
-        print 'append constant : ', append_const
+        logger.info('append constant : %s' % append_const)
         if append_const:
             self.B = numpy.hstack((self.B, numpy.ones((self.B.shape[0],1))))
         self.B = sp.csr_matrix(self.B)
 
         # inverse dictionary
         self.ind_to_key = dict(izip(self.tile_ind.values(), self.tile_ind.keys()))
-        print 'total number of tiles: ', ind
+        logger.info('total number of tiles: %i' % ind)
 
 def test_tiles(n_samples = 100, env_size = 15):
     
     mdp = grid_world.MDP(size = env_size)
     r, s, a = mdp.sample_encoding(n_samples, 'square-tile')
     assert r.shape[0] == s.shape[0]-1 == a.shape[0] - 1
-    
-    print s.todense()
-    
+     
     env_size = mdp.env.n_rows
     n = env_size**2
     print 'env size: ', env_size

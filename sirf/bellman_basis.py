@@ -25,7 +25,7 @@ class BellmanBasis:
         self.shift = shift # prevent singular matrix inversion with this pseudoinverse scalar.
         
 
-        logger.info('building bellman basis: %s',
+        logger.info('building bellman basis: %s' %
                     ':'.join('%dx%d' % x for x in self.shapes))
 
         # params is a list of all learnable parameters in the model -- first the thetas, then w.
@@ -82,8 +82,16 @@ class BellmanBasis:
         self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0],:]
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T
         self.Z_t = TT.concatenate([self.Rlam_t, self.PHIlam_t], axis=1)
+        
+        # create symbolic w_lstd
+        self.PHI0c_t = TT.concatenate([self.PHI0_t, TT.ones((self.PHI0_t.shape[0], 1))], axis=1)
+        self.PHIlamc_t = TT.concatenate([self.PHIlam_t, TT.ones((self.PHIlam_t.shape[0], 1))], axis=1)
+        self.A_t = TT.concatenate([self.PHI0_t - self.PHIlam_t, TT.ones((self.PHI0_t.shape[0], 1))], axis=1) # (PHI0 - PHIlam)|e 
+        self.b_t = TT.dot(self.PHI0c_t.T, self.Rlam_t)
+        a = TT.dot(self.PHI0c_t.T, self.A_t) + TT.eye(self.k + 1) * self.shift
+        self.w_lstd_t = TT.dot(TL.matrix_inverse(a), self.b_t) # includes bias param
 
-        self.cov = TT.dot(self.PHI0_t.T, self.PHI0_t) + self.shift * TT.eye(self.k)
+        self.cov = TT.dot(self.PHI0c_t.T, self.PHI0c_t) + self.shift * TT.eye(self.k) # also includes bias
         self.cov_inv = TL.matrix_inverse(self.cov) # l2 reg to avoid singular matrix
 
         # precompile theano functions and gradients.
@@ -140,7 +148,7 @@ class BellmanBasis:
         kw = dict(on_unused_input='ignore')
         loss_t = getattr(self, '%s_funcs' % loss)()
 
-        logger.info('compiling %s loss', loss)
+        logger.info('compiling %s loss' % loss)
         loss = theano.function(self.theano_vars, loss_t, **kw)
 
         grad_list = []
@@ -181,35 +189,37 @@ class BellmanBasis:
     def bellman_funcs(self):
         ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
-        p0 = TT.concatenate([self.PHI0_t, TT.ones((self.PHI0_t.shape[0], 1))], axis=1)
-        plam = TT.concatenate([self.PHIlam_t, TT.ones((self.PHIlam_t.shape[0], 1))], axis=1)
-        b = TT.dot(p0.T, self.Rlam_t)
-        a = TT.dot(p0.T, p0 - plam) + TT.eye(self.k + 1) * self.shift
-        w_lstd = TT.dot(TL.matrix_inverse(a), b)
-        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(p0 - plam, w_lstd))))
+        
+        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.deltPHIc_t, self.w_lstd))))
 
     def layered_funcs(self):    
         ''' uses self.w_t when measuring loss'''
         # append const feature
-        A = TT.concatenate([self.PHI0_t - self.PHIlam_t, TT.ones((self.PHI0_t.shape[0], 1))], axis = 1)
-        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(A, self.w_t))))
+        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.deltPHIc_t, self.w_t))))
 
     def reward_funcs(self):
         # reward loss: ||(PHI0 (PHI0.T * PHI0))^-1 PHI0.T * Rlam - Rlam||
-        d = TT.dot(self.PHI0_t.T, self.Rlam_t)
-        w_r = TT.dot(self.cov_inv, d)
-        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.PHI0_t, w_r)))) # frobenius norm
+        w_r = TT.dot(self.cov_inv, self.b_t)
+        return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.PHI0c_t, w_r)))) # frobenius norm
+
+    def fullmodel_funcs(self):
+        # model loss: ||PHI0 (PHI0.T * PHI0)^-1 PHI0.T * PHIlam - PHIlam||
+        B = TT.dot(self.PHI0c_t.T, self.PHIlam_t) # TODO append constant features here?
+        W_m = TT.dot(self.cov_inv, B) # least squares weight matrix
+        return TT.sqrt(TT.sum(TT.sqr(self.PHIlam_t - TT.dot(self.PHI0c_t, W_m)))) # frobenius norm
 
     def model_funcs(self):
-        # model loss: ||PHI0 (PHI0.T * PHI0)^-1 PHI0.T * PHIlam - PHIlam||
-        b = TT.dot(self.PHI0_t.T, self.PHIlam_t) # TODO append constant features here?
+        
+        q = TT.dot(self.PHIlamc_t, self.w_lstd)
+        b = TT.dot(self.PHI0c_t.T, q)
         w_m = TT.dot(self.cov_inv, b) # least squares weight matrix
-        return TT.sqrt(TT.sum(TT.sqr(self.PHIlam_t - TT.dot(self.PHI0_t, w_m)))) # frobenius norm
+        return TT.sqrt(TT.sum(TT.sqr(q - TT.dot(self.PHI0c_t, w_m)))) # frobenius norm
 
     def covariance_funcs(self):
         # todo weight by stationary distribution if unsampled?
         # normalize columns?
-        return TT.sum(TT.abs_(self.cov - self.beta_t * TT.dot(self.PHI0_t.T,self.PHI0_t))) # l1 matrix norm, use Z here?
+        cov = TT.dot(self.PHI0_t.T, self.PHI0_t)
+        return TT.sum(TT.abs_(cov - self.beta_t * TT.dot(self.PHI0_t.T, self.PHIlam_t))) # l1 matrix norm, use Z here?
 
     def prediction_funcs(self, norm_cols = True):
         # next-step feature loss: || PHI0 PHI0.T Z - Z || where Z = [ R | PHIlam ]
@@ -272,7 +282,7 @@ class BellmanBasis:
                     _, nz_grads = self.losses['nonzero']
                     grad[sl] += self.nonzero * nz_grads[i](*args).flatten()
             o += (a + 1) * b
-        return grad
+        return grad / S.shape[0]
 
     def grad_rew_pred(self, vec, S, R, Mphi, Mrew):
         '''return the gradient of the reward prediction component of the 
@@ -349,7 +359,7 @@ class BellmanBasis:
         if vec is not None:
             self.params = self._unpack_params(vec)
         if params is not None:
-            logger.info('setting params %s', ', '.join(str(p.shape) for p in params))
+            logger.info('setting params %s' % ', '.join(str(p.shape) for p in params))
             self.params = [p.reshape((a + 1, b)) for (a, b), p in zip(self.shapes, params)]
 
     def _unpack_params(self, vec):
