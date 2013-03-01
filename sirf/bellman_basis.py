@@ -86,12 +86,12 @@ class BellmanBasis:
         # create symbolic w_lstd
         self.PHI0c_t = TT.concatenate([self.PHI0_t, TT.ones((self.PHI0_t.shape[0], 1))], axis=1)
         self.PHIlamc_t = TT.concatenate([self.PHIlam_t, TT.ones((self.PHIlam_t.shape[0], 1))], axis=1)
-        self.A_t = TT.concatenate([self.PHI0_t - self.PHIlam_t, TT.ones((self.PHI0_t.shape[0], 1))], axis=1) # (PHI0 - PHIlam)|e 
+        self.A_t = TT.concatenate([(self.PHI0_t - self.PHIlam_t), TT.ones((self.PHI0_t.shape[0], 1))], axis=1) # (PHI0 - PHIlam)|e 
         self.b_t = TT.dot(self.PHI0c_t.T, self.Rlam_t)
         a = TT.dot(self.PHI0c_t.T, self.A_t) + TT.eye(self.k + 1) * self.shift
         self.w_lstd_t = TT.dot(TL.matrix_inverse(a), self.b_t) # includes bias param
 
-        self.cov_t = TT.dot(self.PHI0c_t.T, self.PHI0c_t) + self.shift * TT.eye(self.k) # also includes bias
+        self.cov_t = TT.dot(self.PHI0c_t.T, self.PHI0c_t) + self.shift * TT.eye(self.k+1) # also includes bias
         self.cov_inv_t = TL.matrix_inverse(self.cov_t) # l2 reg to avoid singular matrix
 
         # precompile theano functions and gradients.
