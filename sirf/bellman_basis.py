@@ -280,7 +280,7 @@ class BellmanBasis:
                     _, nz_grads = self.losses['nonzero']
                     grad[sl] += self.nonzero * nz_grads[i](*args).flatten()
             o += (a + 1) * b
-        return grad
+        return grad / S.shape[0]
 
     def grad_rew_pred(self, vec, S, R, Mphi, Mrew):
         '''return the gradient of the reward prediction component of the 
