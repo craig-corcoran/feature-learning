@@ -71,11 +71,13 @@ def main(ks = 16,
     n = 4
 
     method = (
-        ('layered',            ('all', )), # baseline
-        ('prediction',         ('theta-all', )),
-        ('covariance',         ('theta-all', )), # with reward, without fine-tuning
-        ('prediction layered', ('theta-all', 'all')),
-        ('covariance layered', ('theta-all', 'all')), # theta-model here for 2nd wrt?
+        ('layered',                  ('all', )), # baseline
+        ('prediction',               ('theta-all', )),
+        ('covariance',               ('theta-all', )), # with reward, without fine-tuning
+        ('prediction layered',       ('theta-all', 'all')),
+        ('covariance layered',       ('theta-all', 'all')), # theta-model here for 2nd wrt?
+        ('value_prediction',         ('theta-all', )),
+        ('value_prediction layered', ('theta-all', 'all')),
         )[method]
 
     logger.info('constructing basis')
@@ -94,46 +96,45 @@ def main(ks = 16,
     kw = dict(lam=lam, gam=gam, sampled=True, eps=eps)
 
     # sample data: training, validation, test, and bellman ("true") sets
+    n_steps = sirf.BellmanBasis._calc_n_steps(lam = lam, gam = gam, eps = eps) - 1
     Mphi, Mrew = sirf.BellmanBasis.get_mixing_matrices(n_samples, **kw)
-    S, R = sample(n_samples)
-
-    Mphi_test, Mrew_test = sirf.BellmanBasis.get_mixing_matrices(1024, **kw)
-    S_valid, R_valid = sample(1024)
-    S_test, R_test = sample(1024)
+    S, R = sample(n_samples + n_steps)
+    S_valid, R_valid = sample(n_samples + n_steps)
+    S_test, R_test = sample(n_samples + n_steps)
 
     logger.info('training with %i samples and %s method', S.shape[0], method)
     loss_list, wrt_list = method
     assert len(loss_list.split()) == len(wrt_list)
 
     recordable = (
-        ('test-bellman', bb.loss_be, S_test, R_test, Mphi_test, Mrew_test),
-        ('test-reward', bb.loss_r, S_test, R_test, Mphi_test, Mrew_test),
-        ('test-model', bb.loss_m, S_test, R_test, Mphi_test, Mrew_test),
+        ('test-bellman', bb.loss_be, S_test, R_test),
+        ('test-reward', bb.loss_r, S_test, R_test),
+        ('test-model', bb.loss_m, S_test, R_test),
         )
 
     losses = dict((r[0], []) for r in recordable)
     losses['true-bellman'] = []
     losses['policy'] = []
     def trace():
-        Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(16384, **kw)
-        S_be, R_be = sample(16384)
-        loss = bb.loss_be(*(bb.params + [S_be, R_be, Mphi_be, Mrew_be]))
+        Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(1024, **kw)
+        S_be, R_be = sample(1024 + n_steps)
+        loss = bb.loss_be(*(bb.params + [S_be, R_be, Mphi_be, Mrew_be])) / 1024
         logger.info('loss true-bellman: %s', loss)
         losses['true-bellman'].append(loss)
 
-        w = sirf.CartPole()
+        cp = sirf.CartPole()
         p = sirf.ValuePolicy(get_value = bb.estimated_value)
-        n = 1000
+        n = 4096
         e = 0
         while n > 0:
-            trace = w.single_episode(p)
+            trace = cp.single_episode(p)
             e += 1
             n -= len(trace)
-        logger.info('loss policy: %s', -e)
-        losses['policy'].append(-e)
+        logger.info('loss policy: %s', e)
+        losses['policy'].append(e)
 
-        for key, func, s, r, phi, rew in recordable:
-            loss = func(*(bb.params + [s, r, phi, rew]))
+        for key, func, s, r in recordable:
+            loss = func(*(bb.params + [s, r, Mphi, Mrew])) / n_samples
             logger.info('loss %s: %s', key, loss)
             losses[key].append(loss)
 
@@ -167,7 +168,7 @@ def main(ks = 16,
                             maxiter = max_iter,
                             ))
 
-                err = bb.loss(bb.flat_params, S_valid, R_valid, Mphi_test, Mrew_test)
+                err = bb.loss(bb.flat_params, S_valid, R_valid, Mphi, Mrew)
                 if (best_test_loss - err) / best_test_loss > min_imp:
                     waiting = 0
                     best_test_loss = err
