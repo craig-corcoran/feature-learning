@@ -80,7 +80,7 @@ def main(workers = 0,
          fldir = '/scratch/cluster/ccor/feature-learning/',
          movie = False,
          req_rew = True,
-         record_runs = False,
+         record_runs = True,
          ):
 
     if n_samples:
@@ -90,6 +90,8 @@ def main(workers = 0,
     # append reward to basis when using perfect info?
     if training_methods is None:
         training_methods = [
+            (['value_prediction'],[['theta-all']]),
+            (['value_prediction', 'layered'],[['theta-all'],['theta-all','w']]),
             (['prediction'],[['theta-all']]),
             (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
             (['covariance'], [['theta-all']]),
@@ -97,7 +99,7 @@ def main(workers = 0,
             (['layered'], [['theta-all', 'w']]), # baseline
             ]  
 
-    losses = ['test-bellman', 'test-reward',  'test-model', 'test-fullmodel',
+    losses = ['test-bellman', 'test-reward',  'test-model', 'test-fullmodel', # test-training
               'true-bellman', 'true-reward', 'true-model', 'true-lsq'] \
                 if n_samples else \
              ['true-bellman', 'true-reward', 'true-model'] 
@@ -249,6 +251,28 @@ def main(workers = 0,
                             ('n_samples' if n_samples else 'full_info'), '.pdf')
     plt.savefig(plot_path) 
 
+#def out_string(pref, root, suff = ''):
+        #return '%s%s.k=%i.reg=%s.a=%s.lam=%s.gam=%s%s%s%s' % (
+        #pref,
+        #root,
+        #k,
+        #str(reg) if reg is None else reg[0] + str(reg[1]),
+        #str(alpha),
+        #lam, gam, #'+'.join(losses),
+        #'.samples=%s' % n_samples if n_samples else '',
+        #'.nonlin=%s' % nonlin if nonlin else '',
+        #suff)
+
+
+#def post_analysis(directory, str_args): 
+    
+    #pref, k, reg, alpha, lam, gam, n_samples, nonlin, suff = str_args
+    
+    #with util.openz() as out_file:
+        #pickle.dump(d_loss_data, out_file, protocol = -1)
+
+    
+
 def plot_aggregate_data(n_samples, d_loss_data, labels):
 
     x = numpy.array(n_samples, dtype = numpy.float64) if n_samples else range(len(n_samples))
@@ -263,7 +287,7 @@ def plot_aggregate_data(n_samples, d_loss_data, labels):
         ax = f.add_subplot(rows,cols,i+1) 
         
         for h,lb in enumerate(labels):                
-
+            
             std = numpy.std(mat[:,:,h], axis=1)
             ste = std / numpy.sqrt(x)
             mn = numpy.mean(mat[:,:,h], axis=1)
@@ -272,7 +296,7 @@ def plot_aggregate_data(n_samples, d_loss_data, labels):
             ax.plot(x, mn, label = lb)
             plt.title(key)
             plt.axis('off')
-            #plt.legend(loc = 3) # lower left
+            plt.legend() # lower left
 
 
 def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses, 
@@ -283,6 +307,8 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
 
     S, S_val, S_test = S_data
     R, R_val, R_test = R_data
+
+    n_rows = float(S.shape[0])
 
     # initialize loss dictionary
     d_loss_learning = {}
@@ -303,15 +329,15 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
         # record losses with test set
         for loss, arr in d_loss.items():
             if loss == 'test-training':
-                val = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew)
+                val = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew) / n_rows
             elif loss == 'test-bellman':
-                val = basis.loss_be(*(basis.params + [S_test, R_test, Mphi, Mrew]))
+                val = basis.loss_be(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'test-reward':
-                val = basis.loss_r(*(basis.params + [S_test, R_test, Mphi, Mrew]))
+                val = basis.loss_r(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'test-model':
-                val = basis.loss_m(*(basis.params + [S_test, R_test, Mphi, Mrew]))
+                val = basis.loss_m(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'test-fullmodel':
-                val = basis.loss_fm(*(basis.params + [S_test, R_test, Mphi, Mrew]))
+                val = basis.loss_fm(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'true-bellman':
                 val = model.bellman_error(IM, weighting = weighting)
             elif loss == 'true-reward':
@@ -341,7 +367,7 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
             maxiter = max_iter,
             ))
 
-    for loss, wrt in zip(loss_list.split(), wrt_list):
+    for loss, wrt in zip(loss_list, wrt_list):
         
         waiting = 0
         best_params = None
@@ -366,7 +392,8 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
                     plot_features(basis.thetas[-1][:-1], vmin = vmin, vmax = vmax)
                     plt.savefig(fl_dir + 'sirf/output/plots/movie/img_%03d.png' % it)
 
-                for loss_, wrt_ in ((loss, wrt.split()), ('layered', ['w'])):
+                old_params = copy.deepcopy(basis.flat_params)
+                for loss_, wrt_ in ((loss, wrt), ('layered', ['w'])):
                     basis.set_loss(loss_, wrt_)
                     basis.set_params(scipy.optimize.fmin_cg(
                             basis.loss, basis.flat_params, basis.grad,
@@ -375,13 +402,6 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
                             maxiter = max_iter,
                             ))
 
-                old_params = copy.deepcopy(basis.flat_params)
-                basis.set_params( vec = scipy.optimize.fmin_cg(basis.loss, basis.flat_params, basis.grad,
-                                  args = (S, R, Mphi, Mrew),
-                                  full_output = False,
-                                  maxiter = max_iter,
-                                  gtol = 1e-8
-                                  ) )
                 delta = numpy.linalg.norm(old_params-basis.flat_params)
                 logger.info('delta theta: %.2f' % delta)
                 
@@ -430,7 +450,7 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
     # store final errors in a batch loss dictionary
     d_loss_batch = dict(izip(d_loss_learning.keys(), map(lambda x: x[-1], d_loss_learning.values())))
     with util.openz('%ssirf/output/pickle/d_loss_batch%s%s%s' % (fl_dir, ind_tuple, out_string,'.pickle.gz'), "wb") as out_file:
-            pickle.dump(d_loss_learning, out_file, protocol = -1)
+            pickle.dump(d_loss_batch, out_file, protocol = -1)
 
 
     if record_runs:
@@ -447,10 +467,10 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
         plt.savefig(fl_dir + 'sirf/output/plots/basis0' + out_string + '.pdf')
         
         # plot learning curves
-        pltd = plot_learning_curves(d_loss, switch, filt = 'test')
-        if pltd:
+        pltd = plot_learning_curves(d_loss_learning, switch, filt = 'test')
+        if pltd: # if we actually plotted
             plt.savefig(fl_dir + 'sirf/output/plots/test_loss' + out_string + '.pdf')
-        pltd = plot_learning_curves(d_loss, switch, filt = 'true')
+        pltd = plot_learning_curves(d_loss_learning, switch, filt = 'true')
         if pltd:
             plt.savefig(fl_dir + 'sirf/output/plots/true_loss' + out_string + '.pdf')    
         
@@ -523,7 +543,7 @@ def plot_learning_curves(d_loss, switch, filt = '', ylim = None, mean_norm = Fal
 def _plot_features(phi, r = None, c = None, vmin = None, vmax = None):
     plt.clf()
     j,k = phi.shape
-    if r is None:
+    if r is None: 
         r = c = numpy.round(numpy.sqrt(j))
         assert r*c == j
         

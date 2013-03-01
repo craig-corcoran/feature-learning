@@ -14,7 +14,7 @@ logger = sirf.get_logger(__name__)
 
 class BellmanBasis:
 
-    LOSSES = 'bellman layered model fullmodel reward covariance prediction rew_prediction nonzero l2code l1code l1theta'.split()
+    LOSSES = 'bellman layered model fullmodel reward covariance prediction value_prediction rew_prediction nonzero l2code l1code l1theta'.split()
 
     def __init__(self, n, ks, beta, alpha = 1., thetas = None, w = None, reg_tuple = None,
                  nonlin = None, nonzero = None, shift = 1e-6, input_bias = True):
@@ -91,7 +91,7 @@ class BellmanBasis:
         a = TT.dot(self.PHI0c_t.T, self.A_t) + TT.eye(self.k + 1) * self.shift
         self.w_lstd_t = TT.dot(TL.matrix_inverse(a), self.b_t) # includes bias param
 
-        self.cov_t = TT.dot(self.PHI0c_t.T, self.PHI0c_t) + self.shift * TT.eye(self.k+1) # also includes bias
+        self.cov_t = TT.dot(self.PHI0c_t.T, self.PHI0c_t) + self.shift * TT.eye(self.k + 1) # also includes bias
         self.cov_inv_t = TL.matrix_inverse(self.cov_t) # l2 reg to avoid singular matrix
 
         # precompile theano functions and gradients.
@@ -201,7 +201,6 @@ class BellmanBasis:
     def bellman_funcs(self):
         ''' uses matrix inverse to solve for w'''
         # lstd weights for bellman error using normal eqns
-        
         return TT.sqrt(TT.sum(TT.sqr(self.Rlam_t - TT.dot(self.A_t, self.w_lstd_t))))
 
     def layered_funcs(self):    
@@ -221,7 +220,6 @@ class BellmanBasis:
         return TT.sqrt(TT.sum(TT.sqr(self.PHIlam_t - TT.dot(self.PHI0c_t, W_m)))) # frobenius norm
 
     def model_funcs(self):
-        
         q = TT.dot(self.PHIlamc_t, self.w_lstd_t)
         b = TT.dot(self.PHI0c_t.T, q)
         w_m = TT.dot(self.cov_inv_t, b) # least squares weight matrix
@@ -244,6 +242,14 @@ class BellmanBasis:
         A = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, Z)) - Z
         B = TS.structured_dot(self.Alpha_t, A.T).T
         return TT.sqrt(TT.sum(TT.sqr(B))) # frobenius norm
+
+    def value_prediction_funcs(self):
+        
+        q = TT.dot(self.PHIlam_t, self.w_t[:-1])
+        q_err = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, q)) - q
+        r_err = TT.dot(self.PHI0_t, TT.dot(self.PHI0_t.T, self.Rlam_t)) - self.Rlam_t
+        return TT.sum(TT.abs_(q_err)) + TT.sum(TT.abs_(r_err)) # currently no relative weighting
+
     
     def rew_prediction_funcs(self, norm_cols = True):
         if norm_cols:
