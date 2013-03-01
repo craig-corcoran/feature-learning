@@ -1,3 +1,7 @@
 #!/bin/bash
 
-PYTHONPATH=$(pwd)/../..:$PYTHONPATH python cartpole_experiment.py $*
+t=$(mktemp -d)
+
+THEANO_FLAGS="config.compiledir=$t" PYTHONPATH=$(pwd)/../..:$PYTHONPATH python cartpole_experiment.py $*
+
+rm -fr $t

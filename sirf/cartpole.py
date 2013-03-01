@@ -11,11 +11,13 @@ import random as pr
 
 class CartPole(object):
 
-    def __init__(self, x = 0.0, xdot = 0.0, theta = 0.0, thetadot = 0.0):
+    def __init__(self, x = 0.0, xdot = 0.0, theta = 0.0, thetadot = 0.0, num_actions = 2):
         self.x = x
         self.xdot = xdot
         self.theta = theta
         self.thetadot = thetadot
+
+        self.num_actions = num_actions
 
         # some constants
         self.gravity = 9.8
@@ -39,7 +41,7 @@ class CartPole(object):
         self.x,self.xdot,self.theta,self.thetadot = (0.0,0.0,0.0,0.0)
 
     def random_policy(self, *args):
-        return pr.choice([0,1])
+        return pr.choice(range(self.num_actions))
 
     def single_episode(self, policy = None):
         self.reset()
@@ -109,11 +111,7 @@ class CartPole(object):
             return 0.0
 
     def move(self, action, boxed=False): # binary L/R action
-        force = 0.0
-        if action > 0:
-            force = self.force_mag
-        else:
-            force = -self.force_mag
+        force = self.force_mag * (2. * action / (self.num_actions - 1.) - 1.)
 
         costheta = math.cos(self.theta)
         sintheta = math.sin(self.theta)
@@ -134,6 +132,31 @@ class CartPole(object):
             return pstate, action, self.reward(), self.state()
         else:
             return [px,pxdot,ptheta,pthetadot],action,self.reward(),[self.x,self.xdot, self.theta, self.thetadot]
+
+
+class ValuePolicy:
+    def __init__(self, get_value, num_actions=2):
+        self.get_value = get_value
+        self.num_actions = num_actions
+        self.actions = range(num_actions)
+        self.sim = CartPole(num_actions=num_actions)
+
+    def __call__(self, x, xdot, theta, thetadot):
+        best_value = None
+        best_action = None
+        pr.shuffle(self.actions)
+        for action in self.actions:
+            self.sim.x = x
+            self.sim.xdot = xdot
+            self.sim.theta = theta
+            self.sim.thetadot = thetadot
+            _, _, _, state = self.sim.move(action)
+            v = self.get_value(state)
+            if best_value is None or v > best_value:
+                best_value = v
+                best_action = action
+        return best_action
+
 
 if __name__ == '__main__':
 
