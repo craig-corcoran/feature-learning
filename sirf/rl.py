@@ -1,16 +1,24 @@
 import numpy
 import scipy.sparse
 
-#TODO lambda versions of losses
-
 class Model:
     ''' RL model, including reward, transition function, and functions for 
     getting the bellman error, etc'''
 
-    def __init__(self, R, P, gam = (1-4e-3)):
+    def __init__(self, R, P, gam = (1-4e-3), lam = 1.):
         self.R = R
         self.P = P
         self.gam = gam
+        self.lam = lam
+
+        self.Plam = numpy.zeros_like(P)
+        Pi = self.gam * numpy.eye(self.P.shape[0])
+        n = calc_discount_horizon(lam, gam)
+        for i in xrange(n):
+            Pi = self.lam * self.gam * numpy.dot(Pi, self.P)
+            self.Plam += Pi
+        self.Plam *= (1-self.lam)
+        
         self.V = self._value_func(self.R, self.P, self.gam)
         self.mu = self._stationary_dist(self.R, self.P, self.gam)
 
@@ -36,7 +44,7 @@ class Model:
 
     def get_lstd_weights(self, PHI, shift = 1e-7): 
 
-        A = numpy.dot(PHI.T, (PHI - self.gam * numpy.dot(self.P, PHI)))
+        A = numpy.dot(PHI.T, (PHI - numpy.dot(self.Plam, PHI)))
         A += shift * numpy.eye(A.shape[0])
         b = numpy.dot(PHI.T, self.R)
         if A.ndim > 0:
@@ -51,15 +59,15 @@ class Model:
         if w is None:
             w = self.get_lstd_weights(PHI)
         
-        A = (PHI - self.gam * numpy.dot(self.P, PHI))
+        A = (PHI - numpy.dot(self.Plam, PHI))
         # diagonal weight matrix
         D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
         return numpy.linalg.norm(numpy.dot(D, (self.R - numpy.dot(A, w))))
 
-    def model_error(self, PHI, W = None, weighting = 'uniform'):
+    def fullmodel_error(self, PHI, W = None, weighting = 'uniform'):
         
-        A = numpy.dot(self.P, PHI)
-        PHI = self.append_bias(PHI) # include bias in A to be reconstructed?
+        A = numpy.dot(self.Plam, PHI)
+        PHI = self.append_bias(PHI) # include bias in A to be reconstructed
         if W is None:
             W = numpy.linalg.lstsq(PHI, A)[0] 
                 
@@ -67,15 +75,26 @@ class Model:
         D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
         return numpy.linalg.norm(numpy.dot(D, (numpy.dot(PHI, W) - A)))
 
+    def model_error(self, PHI, w = None, q = None, weighting = 'uniform'):
+        PHI = self.append_bias(PHI)
+        if w is None:
+            w = self.get_lstd_weights(PHI)
+
+        a = numpy.dot(self.Plam, numpy.dot(PHI, w))
+        if q is None:
+            q = numpy.linalg.lstsq(PHI, a)[0]
+
+        # diagonal weight matrix
+        D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
+        return numpy.linalg.norm(numpy.dot(D, (numpy.dot(PHI, q) - a)))
+
     def reward_error(self, PHI, w = None, weighting = 'uniform'):
         
         PHI = self.append_bias(PHI)
-
         if w is None:
             w = numpy.linalg.lstsq(PHI, self.R)[0]
 
         D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
-
         a = numpy.linalg.norm(numpy.dot(D, (numpy.dot(PHI, w) - self.R)))
         return a
 
@@ -92,6 +111,9 @@ class Model:
         # diagonal weight matrix            
         D = numpy.diag(self.mu) if weighting is 'stationary' else numpy.eye(PHI.shape[0])
         return numpy.linalg.norm(numpy.dot(D, self.V - numpy.dot(PHI, w)))
+
+def calc_discount_horizon(lam, gam, eps = 1e-6):
+    return 1 if lam == 0 else int(numpy.ceil(numpy.log(eps) / numpy.log(min(lam, gam))))
 
 
 

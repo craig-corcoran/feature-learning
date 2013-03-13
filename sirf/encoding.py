@@ -12,6 +12,8 @@ logger = sirf.get_logger(__name__)
 
 class TabularFeatures():
     
+    tostring = 'tabular'
+
     def __init__(self, env_size, append_const = True):
         self.env_size = env_size
         self.B = sp.identity(self.env_size**2)
@@ -31,10 +33,19 @@ class TabularFeatures():
         # multiply basis by weights
         assert W.shape[0] == self.n_features
         return self.B.dot(W)
+
+    def __str__(self):
+        return self.tostring
+
+    def __unicode__(self):
+        return u'' + self.tostring
+    def __repr__(self):
+        return self.tostring
     
 
 class TileFeatures(TabularFeatures):
     
+    tostring = 'tile'
     def __init__(self, env_size, append_const = True):
         ''' builds square tile codes for a square grid world that is env_size^2'''
         

@@ -1,4 +1,6 @@
 import os
+import csv
+import time
 import copy
 import numpy
 import pickle
@@ -12,16 +14,26 @@ import condor
 import sirf
 import sirf.grid_world as grid_world
 import sirf.util as util
+
 from itertools import izip
 from sirf.rl import Model
+from sirf.plotting import *
 from sirf.encoding import TabularFeatures, TileFeatures
-from sirf.bellman_basis import plot_features, BellmanBasis 
+from sirf.bellman_basis import plot_features, BellmanBasis
+from sirf.aggregate import out_string, reorder_columns
+from sirf.util import openz
+
+# set matplotlib to have small legends
 
 # mark  best theta
 # init with datapoints
 # on policy learning with perfect info?
-# initializing w to w* or faster gradient inner loop
 # running until long convergence
+
+# vary: lambda, req_rew, encoding, nonlin, size, reg, shift, sample init
+# policy distance metric
+# value prediction behaviour
+
 
 theano.gof.compilelock.set_lock_status(False)
 theano.config.on_unused_input = 'ignore'
@@ -51,7 +63,7 @@ logger = sirf.get_logger(__name__)
     training_methods=('list of tuples of loss fn list and wrt params list', 'option'),
     min_imp=('train until loss improvement percentage is less than this', 'option', None, float),
     min_delta=('train until change in parameters is less than this', 'option', None, float),
-    fldir=('feature-learning directory that has sirf/output in it', 'option', None, str),
+    fldir=('feature-learning directory that has sirf/ and output/ in it', 'option', None, str),
     movie=('Boolean switch for recording movie of basis functions during learning', 'option', None, str),
     req_rew=('Boolean switch to require nonzero reward to be in the sample set when sampling', 'option', None, str),
     record_runs=('Boolean switch for recording learning curve plots and pickles at the end of each run', 'option', None, str),
@@ -90,6 +102,8 @@ def main(workers = 0,
     # append reward to basis when using perfect info?
     if training_methods is None:
         training_methods = [
+            (['covariance', 'prediction', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all'],['theta-all','w']]),
+            (['prediction', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all','w']]),
             (['value_prediction'],[['theta-all']]),
             (['value_prediction', 'layered'],[['theta-all'],['theta-all','w']]),
             (['prediction'],[['theta-all']]),
@@ -100,9 +114,9 @@ def main(workers = 0,
             ]  
 
     losses = ['test-bellman', 'test-reward',  'test-model', 'test-fullmodel', # test-training
-              'true-bellman', 'true-reward', 'true-model', 'true-lsq'] \
+              'true-bellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] \
                 if n_samples else \
-             ['true-bellman', 'true-reward', 'true-model'] 
+             ['true-bellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] 
 
     logger.info('building environment of size %i' % env_size)
     mdp = grid_world.MDP(walls_on = True, size = env_size)
@@ -110,7 +124,7 @@ def main(workers = 0,
 
     m = Model(mdp.env.R, mdp.env.P, gam = gam)
     
-    # constant appended in encoder by default
+    # create raw data encoder (constant appended in encoder by default)
     if encoding is 'tabular':
         encoder = TabularFeatures(env_size, append_const = True)
     elif encoding is 'tile':
@@ -158,6 +172,9 @@ def main(workers = 0,
 
         return (X, X_val, X_test), (R, R_val, R_test), weighting
     
+    #run_path = fldir + 'sirf/output/pickle/runs/'
+    #logger.info('removing old run data from %s' % run_path)
+    #os.system("rm %s*.pickle.gz" % (run_path))
 
     logger.info('constructing basis')
     reg = None
@@ -168,11 +185,8 @@ def main(workers = 0,
     if l2code is not None:
         reg = ('l2code', l2code)
 
-    # initialize loss dictionary with numpy array for each run, method, and number of samples
-    d_loss_data = {}
-    for key in losses:
-        d_loss_data[key] = numpy.zeros((len(n_samples), n_runs, len(training_methods)))
-    
+    run_param_keys = ['k','method','encoding','samples','size','weighting',
+                      'lambda','gamma','alpha','regularization','nonlinear']
     def yield_jobs(): 
         
         for i,n in enumerate(n_samples or [n_states]):
@@ -188,8 +202,8 @@ def main(workers = 0,
 
                 n_features = encoder.n_features
                 # initialize parameters
-                theta_init = 1e-2*numpy.random.standard_normal((n_features, k))
-                #theta_init /= numpy.sqrt((theta_init * theta_init).sum(axis=0))
+                theta_init = numpy.random.standard_normal((n_features, k))
+                theta_init /= numpy.sqrt((theta_init * theta_init).sum(axis=0))
                 w_init = numpy.random.standard_normal((k+1,1)) 
                 w_init = w_init / numpy.linalg.norm(w_init)
 
@@ -204,106 +218,49 @@ def main(workers = 0,
                     loss_list, wrt_list = tm
                     assert len(loss_list) == len(wrt_list)
                     
-                    # generate output string with relevant parameters
-                    out_string = '%s.k=%i.reg=%s.a=%s.lam=%s.gam=%s.%s.%s%s.' % (
-                        str(tm),
-                        k,
-                        str(reg) if reg is None else reg[0] + str(reg[1]),
-                        str(alpha),
-                        lam, gam, weighting, #'+'.join(losses),
-                        '.samples=%d' % n if n_samples else '',
-                        '.nonlin=%s' % nonlin if nonlin else '')
-                    
-                    yield (train_basis, [(i,r,j), bb_params, bb_dict, tm, m, losses, encoder,
-                        X_data, R_data, Mphi, Mrew, patience, max_iter, weighting, 
-                        out_string, min_imp, min_delta, env_size, fldir, movie, record_runs])
+                    run_param_values = [k, tm, encoder, n, env_size, weighting, lam, gam, alpha, 
+                              reg[0]+str(reg[1]) if reg else 'None',
+                              nonlin if nonlin else 'None'] # TODO what should empty string be?
 
-    # aggregate the condor data
-    for (_, result) in condor.do(yield_jobs(), workers):
-            d_batch_loss, ind_tuple = result
-            for name in d_batch_loss.keys():
-                d_loss_data[name][ind_tuple] = d_batch_loss[name]
-
-    def out_string(pref, root, suff = ''):
-        return '%s%s.k=%i.reg=%s.a=%s.lam=%s.gam=%s%s%s%s' % (
-        pref,
-        root,
-        k,
-        str(reg) if reg is None else reg[0] + str(reg[1]),
-        str(alpha),
-        lam, gam, #'+'.join(losses),
-        '.samples=%s' % n_samples if n_samples else '',
-        '.nonlin=%s' % nonlin if nonlin else '',
-        suff)
-
-    # save results!
+                    d_run_params = dict(izip(run_param_keys, run_param_values))
+                     
+                    yield (train_basis,[d_run_params, bb_params, bb_dict,
+                                        m, losses, # model and loss list
+                                        X_data, R_data, Mphi, Mrew, # training data
+                                        max_iter, patience, min_imp, min_delta, # optimization params 
+                                        fldir, movie, record_runs]) # recording params
+    # create output file path
+    date_str = time.strftime('%y%m%d.%X').replace(':','')
     out_dir = fldir + 'sirf/output/'
-    pickle_path = out_string(out_dir, 'pickle/%s_results' % 
-                    ('n_samples' if n_samples else 'full_info'), '.pickle.gz')
-
-    logger.info('saving results to %s' % pickle_path)
-    with util.openz(pickle_path, "wb") as out_file:
-        pickle.dump(d_loss_data, out_file, protocol = -1)
-
-    labels = map(lambda x: str(x[0]), training_methods)
-    plot_aggregate_data(n_samples, d_loss_data, labels)
-    plot_path = out_string(out_dir, 'plots/%s_results' % 
-                            ('n_samples' if n_samples else 'full_info'), '.pdf')
-    plt.gcf().set_size_inches(16, 12)
-    plt.savefig(plot_path) 
-
-#def out_string(pref, root, suff = ''):
-        #return '%s%s.k=%i.reg=%s.a=%s.lam=%s.gam=%s%s%s%s' % (
-        #pref,
-        #root,
-        #k,
-        #str(reg) if reg is None else reg[0] + str(reg[1]),
-        #str(alpha),
-        #lam, gam, #'+'.join(losses),
-        #'.samples=%s' % n_samples if n_samples else '',
-        #'.nonlin=%s' % nonlin if nonlin else '',
-        #suff)
-
-
-#def post_analysis(directory, str_args): 
+    save_path =  '%scsv/%s.%s_results%s' % (
+               out_dir, 
+               date_str, 
+               'n_samples' if n_samples else 'full_info', 
+               '.csv.gz')
+    logger.info('saving results to %s' % save_path)
     
-    #pref, k, reg, alpha, lam, gam, n_samples, nonlin, suff = str_args
-    
-    #with util.openz() as out_file:
-        #pickle.dump(d_loss_data, out_file, protocol = -1)
+    # get column title list
+    d_param = dict(izip(run_param_keys, numpy.zeros(len(run_param_keys))))
+    d_loss = dict(izip(losses, numpy.zeros(len(run_param_keys))))
+    col_keys_array,_ = reorder_columns(d_param, d_loss)
 
-    
+    with openz(save_path, "wb") as out_file:
+        writer = csv.writer(out_file)
+        writer.writerow(col_keys_array)
 
-def plot_aggregate_data(n_samples, d_loss_data, labels):
+        for (_, out) in condor.do(yield_jobs(), workers):
+            keys, vals = out
+            assert (keys == col_keys_array).all() # todo catch
+            writer.writerow(vals) 
 
-    x = numpy.array(n_samples, dtype = numpy.float64) if n_samples else range(len(n_samples))
-    f = plt.figure()
-    logger.info('plotting aggregate run performance data')
+def train_basis(d_run_params, basis_params, basis_dict, 
+                model, losses, 
+                S_data, R_data, Mphi, Mrew, 
+                max_iter, patience, min_imp, min_delta, 
+                fl_dir, movie, record_runs):
 
-    num = len(d_loss_data)
-    cols = numpy.ceil(numpy.sqrt(num))
-    rows = numpy.ceil(num/cols)
-    for i,(key,mat) in enumerate(d_loss_data.items()):
-
-        ax = f.add_subplot(rows,cols,i+1) 
-        
-        for h,lb in enumerate(labels):                
-            
-            std = numpy.std(mat[:,:,h], axis=1)
-            ste = std / numpy.sqrt(x)
-            mn = numpy.mean(mat[:,:,h], axis=1)
-            
-            ax.fill_between(x, mn-ste, mn+ste, alpha=0.15, linewidth = 0)
-            ax.plot(x, mn, label = lb)
-            plt.title(key)
-            plt.axis('off')
-            #plt.legend() # lower left
-
-
-def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses, 
-            encoder, S_data, R_data, Mphi, Mrew, patience, max_iter, weighting, 
-            out_string, min_imp, min_delta, env_size, fl_dir, movie, record_runs):
-
+    method, weighting, encoder, env_size = map(lambda x: d_run_params[x], 
+                                      'method weighting encoding size'.split())
     logger.info('training basis using training method: %s' % str(method))
 
     S, S_val, S_test = S_data
@@ -318,7 +275,7 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
     
     if movie:
         logger.info('clearing movie directory of pngs')
-        movie_path = fl_dir + 'sirf/output/plots/movie/'
+        movie_path = fl_dir + 'sirf/output/plots/learning/movie/'
         os.system("rm %s*.png" % (movie_path)) 
     
     loss_list, wrt_list = method
@@ -345,9 +302,11 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
                 val = model.reward_error(IM, weighting = weighting)
             elif loss == 'true-model':
                 val = model.model_error(IM, weighting = weighting)
+            elif loss == 'true-fullmodel':
+                val = model.fullmodel_error(IM, weighting = weighting)
             elif loss == 'true-lsq':
                 val = model.value_error(IM, weighting = weighting)
-            else: assert False
+            else: print loss; assert False
 
             d_loss[loss] = numpy.append(arr, val)
         return d_loss
@@ -356,8 +315,6 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
     vmax = 0.25
     switch = [] # list of indices where a training method switch occurred
     it = 0
-    IM = encoder.weights_to_basis(basis.thetas[-1])
-    d_loss_learning = record_loss(d_loss_learning)
     
     # train once on w to initialize
     basis.set_loss('layered', ['w'])
@@ -367,6 +324,9 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
             full_output = False,
             maxiter = max_iter,
             ))
+    
+    IM = encoder.weights_to_basis(basis.thetas[-1])
+    d_loss_learning = record_loss(d_loss_learning)
 
     for loss, wrt in zip(loss_list, wrt_list):
         
@@ -377,7 +337,7 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
         if movie:
             # save a blank frame before/between training losses
             plot_features(numpy.zeros_like(basis.thetas[-1][:-1]), vmin = vmin, vmax = vmax)
-            plt.savefig(fl_dir + 'sirf/output/plots/movie/img_%03d.png' % it)
+            plt.savefig(fl_dir + 'sirf/output/plots/learning/movie/img_%03d.png' % it)
         
         if 'w' in wrt_list: # initialize w to the lstd soln given the current basis
             logger.info('initializing w to lstd soln')
@@ -391,7 +351,7 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
                 if movie:
                     # record learning movie frame
                     plot_features(basis.thetas[-1][:-1], vmin = vmin, vmax = vmax)
-                    plt.savefig(fl_dir + 'sirf/output/plots/movie/img_%03d.png' % it)
+                    plt.savefig(fl_dir + 'sirf/output/plots/learning/movie/img_%03d.png' % it)
 
                 old_params = copy.deepcopy(basis.flat_params)
                 for loss_, wrt_ in ((loss, wrt), ('layered', ['w'])):
@@ -402,7 +362,8 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
                             full_output = False,
                             maxiter = max_iter,
                             ))
-
+                basis.set_loss(loss, wrt) # reset loss back from layered
+                 
                 delta = numpy.linalg.norm(old_params-basis.flat_params)
                 logger.info('delta theta: %.2f' % delta)
                 
@@ -439,6 +400,7 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
         except KeyboardInterrupt:
             logger.info( '\n user stopped current training loop')
         
+        # set params to best params from last loss
         basis.set_params(vec = best_params)
         switch.append(it-1)
     
@@ -448,149 +410,46 @@ def train_basis(ind_tuple, basis_params, basis_dict, method, model, losses,
     logger.info( 'final test bellman error: %.2f' % model.bellman_error(IM, weighting = weighting))
     logger.info( 'final sparsity: ' + str( [(numpy.sum(abs(th) < sparse_eps) / float(len(th.flatten()))) for th in basis.params]))
 
-    # store final errors in a batch loss dictionary
-    d_loss_batch = dict(izip(d_loss_learning.keys(), map(lambda x: x[-1], d_loss_learning.values())))
-    with util.openz('%ssirf/output/pickle/d_loss_batch%s%s%s' % (fl_dir, ind_tuple, out_string,'.pickle.gz'), "wb") as out_file:
-            pickle.dump(d_loss_batch, out_file, protocol = -1)
-
+    # edit d_run_params to not include wrt list in method
+    d_run_params['method'] = '-'.join(d_run_params['method'][0])
 
     if record_runs:
+        
         # save results!
-        with util.openz(fl_dir + 'sirf/output/pickle/learning_curve_results' + out_string + '.pickle.gz', "wb") as out_file:
-            pickle.dump(d_loss_learning, out_file, protocol = -1)
+        #ost = out_string(fl_dir+'sirf/output/pickle/learning/', 'learning_curve', d_run_params, '.pickle.gz')
+        #with util.openz(ost, "wb") as out_file:
+            #pickle.dump(d_loss_learning, out_file, protocol = -1)
 
         # plot basis functions
-        plot_features(IM[:, :36])
-        plt.savefig(fl_dir + 'sirf/output/plots/basis' + out_string+ '.pdf')
+        plot_stacked_features(IM[:, :36])
+        figst = out_string(fl_dir+'sirf/output/plots/learning/', 'basis_stacked', d_run_params, '.pdf')
+        plt.savefig(figst)
 
         # plot the basis functions again!
-        _plot_features(IM)
-        plt.savefig(fl_dir + 'sirf/output/plots/basis0' + out_string + '.pdf')
+        plot_features(IM)
+        figst = out_string(fl_dir+'sirf/output/plots/learning/', 'basis_all', d_run_params, '.pdf')
+        plt.savefig(figst)
         
         # plot learning curves
         pltd = plot_learning_curves(d_loss_learning, switch, filt = 'test')
         if pltd: # if we actually plotted
-            plt.savefig(fl_dir + 'sirf/output/plots/test_loss' + out_string + '.pdf')
+            plt.savefig(out_string(fl_dir+'sirf/output/plots/learning/', 'test_loss', d_run_params, '.pdf') )
         pltd = plot_learning_curves(d_loss_learning, switch, filt = 'true')
         if pltd:
-            plt.savefig(fl_dir + 'sirf/output/plots/true_loss' + out_string + '.pdf')    
+            plt.savefig(out_string(fl_dir+'sirf/output/plots/learning/', 'true_loss', d_run_params, '.pdf'))        
         
         # plot value functions
         plot_value_functions(env_size, model, IM)
-        plt.savefig(fl_dir + 'sirf/output/plots/value' + out_string + '.pdf')
+        plt.savefig(out_string(fl_dir+'sirf/output/plots/learning/', 'value_funcs', d_run_params, '.pdf'))
 
         # plot spectrum of reward and features
         gen_spectrum(IM, model.P, model.R)
-        plt.savefig(fl_dir + 'sirf/output/plots/spectrum' + out_string + '.pdf')
-
-        # make movie from basis files saved # currenty not working on cs machines
-        #if movie:
-        #make_learning_movie(movie_path, out_string)
-
-    return d_loss_batch, ind_tuple # basis
-
-def gen_spectrum(Inp, P, R):
-    plt.clf()
-    Inp /= numpy.sqrt((Inp * Inp).sum(axis=0))
-    w,v = numpy.linalg.eig( P )#- beta * numpy.eye(m.P.shape[0]))
-    v = v[:, numpy.argsort(abs(w))[::-1]]
-    v = numpy.real(v)
-    mag = abs(numpy.dot(Inp.T, v))
-    r_mag = abs(numpy.dot(R.T, v))
+        plt.savefig(out_string(fl_dir+'sirf/output/plots/learning/', 'spectrum', d_run_params, '.pdf'))
     
-    order = numpy.argsort(r_mag)[::-1]
-    mag = mag[:, order]
-    r_mag = r_mag[:, order]
-
-    #r_mag = r_mag[r_mag > 1e-10] 
-    
-    # plot feature spectrums
-    x = range(len(w))
-    for sp in mag:
-        plt.semilogy(x, sp, '.')
-    plt.semilogy(range(len(r_mag)), r_mag, 'ko')
-    plt.ylim(1e-6, 1)
-
-def make_learning_movie(movie_path, out_string):
-    
-    logger.info('Making movie animation.mpg - this make take a while')
-    mod_out_str = out_string.replace('(','').replace(')','').replace('[','').replace(']','')
-    cmd = "ffmpeg -qscale 2 -r 8 -b 10M  -i %simg_%s.png  %slearning_mov.%s.mp4" % (movie_path, '%03d', movie_path, mod_out_str)
-    os.system(cmd)
-    #os.system("ffmpeg -qscale 2 -r 4 -b 10M  -i %simg_%03d.png  %slearning_mov.%s.mp4" % (movie_path, movie_path, out_string))
-    #os.system("mencoder %s -mf type=png:fps=10 -ovc lavc -lavcopts vcodec=wmv2 -oac copy -o animation.mpg" % path)
-
-def plot_learning_curves(d_loss, switch, filt = '', ylim = None, mean_norm = False):
-    plt.clf()
-    ax = plt.axes()
-    plotted = False
-    for name, curve in d_loss.items():
-        if filt in name:
-            plotted = True
-            x = range(len(curve))
-            ax.plot(x, curve, label = name)
-    
-    if len(switch) > 1:
-        for i in xrange(len(switch)-1):
-            ax.plot([switch[i], switch[i]], [0, plt.gca().get_ylim()[1]], 'k--', label = 'training switch')
-    
-    if plotted:
-        plt.title('Losses per CG Minibatch')
-        if ylim is not None:
-            plt.ylim(ylim)
-        ax.legend() #ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    return plotted
-
-def _plot_features(phi, r = None, c = None, vmin = None, vmax = None):
-    plt.clf()
-    j,k = phi.shape
-    if r is None: 
-        r = c = numpy.round(numpy.sqrt(j))
-        assert r*c == j
-        
-    m = numpy.floor(numpy.sqrt(k))
-    n = numpy.ceil(k/float(m))
-    assert m*n >= k 
-    
-    f = plt.figure()
-    for i in xrange(k):
-            
-        ax = f.add_subplot(m,n,i+1)
-        im = numpy.reshape(phi[:,i], (r,c))
-        ax.imshow(im, cmap = 'RdBu', interpolation = 'nearest', vmin = vmin, vmax = vmax)
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-def plot_value_functions(size, m, IM):
-    # TODO append bias when solving for value function
-    # plot value functions, true and approx
-    plt.clf()
-    f = plt.figure()
-    
-    # true model value fn
-    ax = f.add_subplot(311)
-    ax.imshow(numpy.reshape(m.V, (size, size)), cmap = 'gray', interpolation = 'nearest')
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    # bellman error estimate (using true model)
-    ax = f.add_subplot(312)
-    w_be = m.get_lstd_weights(IM) # todo add lambda parameter here
-    v_be = numpy.dot(IM, w_be)
-    ax.imshow(numpy.reshape(v_be, (size, size)), cmap = 'gray', interpolation = 'nearest')
-    ax.set_xticks([])
-    ax.set_yticks([])
-    
-    # least squares solution with true value function
-    ax = f.add_subplot(313)
-    w_lsq = numpy.linalg.lstsq(IM, m.V)[0]
-    v_lsq = numpy.dot(IM, w_lsq)
-    ax.imshow(numpy.reshape(v_lsq, (size, size)), cmap = 'gray', interpolation = 'nearest')
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    logger.info('bellman error norm from v: %.2f' % numpy.linalg.norm(m.V - v_be))
-    logger.info('lsq error norm from v: %.2f' % numpy.linalg.norm(m.V - v_lsq))
+    d_loss_batch = dict(izip(d_loss_learning.keys(), map(lambda x: x[-1], 
+                                                    d_loss_learning.values())))
+    # returns keys_array, values_array
+    return reorder_columns(d_run_params, d_loss_batch) 
 
 if __name__ == '__main__':
     sirf.script(main)

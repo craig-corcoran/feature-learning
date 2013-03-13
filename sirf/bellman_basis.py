@@ -220,10 +220,10 @@ class BellmanBasis:
         return TT.sqrt(TT.sum(TT.sqr(self.PHIlam_t - TT.dot(self.PHI0c_t, W_m)))) # frobenius norm
 
     def model_funcs(self):
-        q = TT.dot(self.PHIlamc_t, self.w_lstd_t)
-        b = TT.dot(self.PHI0c_t.T, q)
+        v = TT.dot(self.PHIlamc_t, self.w_lstd_t)
+        b = TT.dot(self.PHI0c_t.T, v)
         w_m = TT.dot(self.cov_inv_t, b) # least squares weight matrix
-        return TT.sqrt(TT.sum(TT.sqr(q - TT.dot(self.PHI0c_t, w_m)))) # frobenius norm
+        return TT.sqrt(TT.sum(TT.sqr(v - TT.dot(self.PHI0c_t, w_m)))) # frobenius norm
 
     def covariance_funcs(self):
         # todo weight by stationary distribution if unsampled?

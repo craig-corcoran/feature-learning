@@ -11,6 +11,7 @@ from . import experiments
 from . import rl 
 from . import grid_world
 from . import bellman_basis
+from . import plotting
 
 from .bellman_basis import BellmanBasis
 from .cartpole import CartPole, ValuePolicy
