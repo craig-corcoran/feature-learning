@@ -25,15 +25,15 @@ from sirf.util import openz
 
 # set matplotlib to have small legends
 
-# mark  best theta
+# mark best theta
 # init with datapoints
 # on policy learning with perfect info?
 # running until long convergence
 
-# vary: lambda, req_rew, encoding, nonlin, size, reg, shift, sample init
+# vary: lambda, req_rew, encoding, nonlin, size, reg, shift, sample init, 
+#       convergence params, col normalization
 # policy distance metric
 # value prediction behaviour
-
 
 theano.gof.compilelock.set_lock_status(False)
 theano.config.on_unused_input = 'ignore'
@@ -325,6 +325,7 @@ def train_basis(d_run_params, basis_params, basis_dict,
             maxiter = max_iter,
             ))
     
+    # TODO keep?
     IM = encoder.weights_to_basis(basis.thetas[-1])
     d_loss_learning = record_loss(d_loss_learning)
 
