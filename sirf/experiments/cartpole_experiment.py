@@ -41,7 +41,7 @@ def sample(n):
     eps=('epsilon for computing TD-lambda horizon', 'option', None, float),
     patience=('train until patience runs out', 'option', None, int),
     max_iter=('train for at most this many iterations', 'option', None, int),
-    min_imp=('train until loss improvement is less than this', 'option', None, int),
+    min_imp=('train until loss improvement is less than this', 'option', None, float),
     l1theta=('regularize theta with this L1 parameter', 'option', None, float),
     l1code=('regularize feature code with this L1 parameter', 'option', None, float),
     n_samples=('sample this many state transitions', 'option', None, int),
@@ -50,6 +50,7 @@ def sample(n):
     method=('training method', 'option', None, int),
     output=('save results in this file', 'option', None, str),
     trace_every=('trace every N iterations', 'option', None, int),
+    seed=('random seed', 'option', None, int),
     )
 def main(ks = 16,
          lam = 0.,
@@ -67,17 +68,22 @@ def main(ks = 16,
          method = 0,
          output = None,
          trace_every = 3,
+         seed = None,
          ):
+    if seed is not None:
+        numpy.random.seed(seed)
+
     n = 4
 
     method = (
         ('layered',                  ('all', )), # baseline
         ('prediction',               ('theta-all', )),
         ('covariance',               ('theta-all', )), # with reward, without fine-tuning
-        ('prediction layered',       ('theta-all', 'all')),
-        ('covariance layered',       ('theta-all', 'all')), # theta-model here for 2nd wrt?
         ('value_prediction',         ('theta-all', )),
+        ('prediction layered',       ('theta-all', 'all')),
+        ('covariance layered',       ('theta-all', 'all')),
         ('value_prediction layered', ('theta-all', 'all')),
+        ('covariance prediction layered', ('theta-all', 'theta-all', 'all')),
         )[method]
 
     logger.info('constructing basis')
@@ -102,6 +108,9 @@ def main(ks = 16,
     S_valid, R_valid = sample(n_samples + n_steps)
     S_test, R_test = sample(n_samples + n_steps)
 
+    Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(4096, **kw)
+    S_be, R_be = sample(4096 + n_steps)
+
     logger.info('training with %i samples and %s method', S.shape[0], method)
     loss_list, wrt_list = method
     assert len(loss_list.split()) == len(wrt_list)
@@ -112,14 +121,16 @@ def main(ks = 16,
         ('test-model', bb.loss_m, S_test, R_test),
         )
 
+    labels = 'ks-%s gam-%.3f lam-%.3f n-%d %s %s' % (
+        ks, gam, lam, n_samples, '+'.join(loss_list.split()), nonlin or 'linear',
+        )
+
     losses = dict((r[0], []) for r in recordable)
     losses['true-bellman'] = []
     losses['policy'] = []
-    def trace():
-        Mphi_be, Mrew_be = sirf.BellmanBasis.get_mixing_matrices(1024, **kw)
-        S_be, R_be = sample(1024 + n_steps)
-        loss = bb.loss_be(*(bb.params + [S_be, R_be, Mphi_be, Mrew_be])) / 1024
-        logger.info('loss true-bellman: %s', loss)
+    def trace(focus):
+        loss = bb.loss_be(*(bb.params + [S_be, R_be, Mphi_be, Mrew_be])) / 2048
+        logger.info('%s %s loss true-bellman %s', labels, focus, loss)
         losses['true-bellman'].append(loss)
 
         cp = sirf.CartPole()
@@ -130,12 +141,12 @@ def main(ks = 16,
             trace = cp.single_episode(p)
             e += 1
             n -= len(trace)
-        logger.info('loss policy: %s', e)
+        logger.info('%s %s loss policy %s', labels, focus, e)
         losses['policy'].append(e)
 
         for key, func, s, r in recordable:
             loss = func(*(bb.params + [s, r, Mphi, Mrew])) / n_samples
-            logger.info('loss %s: %s', key, loss)
+            logger.info('%s %s loss %s %s', labels, focus, key, loss)
             losses[key].append(loss)
 
     bb.set_loss('layered', ['w'])
@@ -144,20 +155,20 @@ def main(ks = 16,
             args = (S, R, Mphi, Mrew),
             full_output = False,
             maxiter = max_iter,
+            disp = False,
             ))
 
     it = 0
     for loss, wrt in zip(loss_list.split(), wrt_list):
-        best_test_loss = 1e10
+        best_test_loss = 1e100
         best_params = None
         waiting = 0
 
         try:
             while waiting < patience:
                 if not it % trace_every:
-                    trace()
+                    trace(loss)
                 it += 1
-                logger.info('** iteration %d', it)
 
                 for loss_, wrt_ in ((loss, wrt.split()), ('layered', ['w'])):
                     bb.set_loss(loss_, wrt_)
@@ -166,10 +177,12 @@ def main(ks = 16,
                             args = (S, R, Mphi, Mrew),
                             full_output = False,
                             maxiter = max_iter,
+                            disp = False,
                             ))
 
+                bb.set_loss(loss, wrt.split())
                 err = bb.loss(bb.flat_params, S_valid, R_valid, Mphi, Mrew)
-                if (best_test_loss - err) / best_test_loss > min_imp:
+                if best_params is None or (best_test_loss - err) / best_test_loss > min_imp:
                     waiting = 0
                     best_test_loss = err
                     best_params = [p.copy() for p in bb.params]
@@ -184,7 +197,7 @@ def main(ks = 16,
         except KeyboardInterrupt:
             print '\n user stopped current training loop'
 
-    trace()
+    trace('done')
 
     if output:
         root = '%s-cartpole.k%s.g%.3f.l%.3f.n%d.%s.%s' % (
