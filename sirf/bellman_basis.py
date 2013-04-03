@@ -226,15 +226,15 @@ class BellmanBasis:
         return TT.sqrt(TT.sum(TT.sqr(v - TT.dot(self.PHI0c_t, w_m)))) # frobenius norm
 
     def covariance_funcs(self):
-        # todo weight by stationary distribution if unsampled?
-        # normalize columns?
+        # todo weight by policy/stationary distribution if unsampled?
+        # TODO normalize columns? here and value-prediction
         cov = TT.dot(self.PHI0_t.T, self.PHI0_t)
         return TT.sum(TT.abs_(cov - self.beta_t * TT.dot(self.PHI0_t.T, self.PHIlam_t))) # l1 matrix norm, use Z here?
 
     def prediction_funcs(self, norm_cols = True):
         # next-step feature loss: || PHI0 PHI0.T Z - Z || where Z = [ R | PHIlam ]
         
-        if norm_cols: #TODO zero mean?
+        if norm_cols: 
             Z = TT.true_div(self.Z_t,  TT.sqrt(TT.sum(TT.sqr(self.Z_t), axis=0)))
         else:
             Z = self.Z_t

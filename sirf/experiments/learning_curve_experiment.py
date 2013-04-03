@@ -23,17 +23,21 @@ from sirf.bellman_basis import plot_features, BellmanBasis
 from sirf.aggregate import out_string, reorder_columns
 from sirf.util import openz
 
-# set matplotlib to have small legends
+# aggregate across files
+# look at covariance loss behavior w/ normalized columns
+# plot error bars and std
+# separate plots by method as well as loss
+# adding true reconstruction loss
+# searching the whole experiment parameter space
+# compare using constant number of iterations
 
 # mark best theta
 # init with datapoints
 # on policy learning with perfect info?
-# running until long convergence
 
 # vary: lambda, req_rew, encoding, nonlin, size, reg, shift, sample init, 
 #       convergence params, col normalization
 # policy distance metric
-# value prediction behaviour
 
 theano.gof.compilelock.set_lock_status(False)
 theano.config.on_unused_input = 'ignore'
@@ -78,21 +82,21 @@ def main(workers = 0,
          beta = 0.995,
          alpha = 1.,
          eps = 1e-5, 
-         patience = 15,
+         patience = 16,
          max_iter = 8, 
          l1theta = None,
-         l1code = 0.0002,
+         l1code = None,
          l2code = None,
          n_samples = None,
          nonlin = None,
          nonzero = None,
          training_methods = None,
-         min_imp = 0.0002,
+         min_imp = 0.0001,
          min_delta = 1e-6,
          fldir = '/scratch/cluster/ccor/feature-learning/',
          movie = False,
          req_rew = True,
-         record_runs = True,
+         record_runs = False,
          ):
 
     if n_samples:
@@ -102,21 +106,23 @@ def main(workers = 0,
     # append reward to basis when using perfect info?
     if training_methods is None:
         training_methods = [
-            (['covariance', 'prediction', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all'],['theta-all','w']]),
-            (['prediction', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all','w']]),
-            (['value_prediction'],[['theta-all']]),
-            (['value_prediction', 'layered'],[['theta-all'],['theta-all','w']]),
-            (['prediction'],[['theta-all']]),
-            (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
             (['covariance'], [['theta-all']]),
+            #(['covariance', 'prediction', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all'],['theta-all','w']]),
+            (['covariance', 'prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all','w']]),
+            #(['covariance', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all','w']]),
+            #(['prediction', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all','w']]),
+            #(['value_prediction'],[['theta-all']]),
+            #(['value_prediction', 'layered'],[['theta-all'],['theta-all','w']]),
+            #(['prediction'],[['theta-all']]),
+            (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
             (['covariance', 'layered'], [['theta-all'],['theta-all','w']]),
             (['layered'], [['theta-all', 'w']]), # baseline
             ]  
 
-    losses = ['test-bellman', 'test-reward',  'test-model', 'test-fullmodel', # test-training
-              'true-bellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] \
+    losses = ['test-layered', 'test-reward',  'test-model', 'test-fullmodel', # test-training
+              'true-policy', 'true-bellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] \
                 if n_samples else \
-             ['true-bellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] 
+             ['true-policy', 'true-bellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] 
 
     logger.info('building environment of size %i' % env_size)
     mdp = grid_world.MDP(walls_on = True, size = env_size)
@@ -231,15 +237,22 @@ def main(workers = 0,
                                         fldir, movie, record_runs]) # recording params
     # create output file path
     date_str = time.strftime('%y%m%d.%X').replace(':','')
-    out_dir = fldir + 'sirf/output/'
-    save_path =  '%scsv/%s.%s_results%s' % (
-               out_dir, 
+    out_dir = fldir + 'sirf/output/csv/'
+    root =  '%s.%s_results' % (
                date_str, 
-               'n_samples' if n_samples else 'full_info', 
-               '.csv.gz')
+               'n_samples' if n_samples else 'full_info')
+    
+    
+
+    d_experiment_params = dict(izip(['k','encoding','size',
+                      'lambda','gamma','alpha','regularization','nl'], 
+                      [k, encoder, env_size, lam, gam, alpha, 
+                              reg[0]+str(reg[1]) if reg else 'None',
+                              nonlin if nonlin else 'None']))
+    save_path = out_string(out_dir, root, d_experiment_params, '.csv.gz')
     logger.info('saving results to %s' % save_path)
     
-    # get column title list
+    # get column title list ordered params | losses using dummy dicts
     d_param = dict(izip(run_param_keys, numpy.zeros(len(run_param_keys))))
     d_loss = dict(izip(losses, numpy.zeros(len(run_param_keys))))
     col_keys_array,_ = reorder_columns(d_param, d_loss)
@@ -283,19 +296,23 @@ def train_basis(d_run_params, basis_params, basis_dict,
     basis = BellmanBasis(*basis_params, **basis_dict)
     
     def record_loss(d_loss):
-
+        # TODO automate/shorten this
         # record losses with test set
         for loss, arr in d_loss.items():
             if loss == 'test-training':
                 val = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew) / n_rows
             elif loss == 'test-bellman':
-                val = basis.loss_be(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
+                val = basis.loss_be(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows 
+            elif loss == 'test-layered':
+                val = basis.losses['layered'][0](*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'test-reward':
                 val = basis.loss_r(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'test-model':
                 val = basis.loss_m(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'test-fullmodel':
                 val = basis.loss_fm(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
+            elif loss == 'true-policy':
+                val = model.policy_distance(IM, weighting = weighting)
             elif loss == 'true-bellman':
                 val = model.bellman_error(IM, weighting = weighting)
             elif loss == 'true-reward':
@@ -307,7 +324,7 @@ def train_basis(d_run_params, basis_params, basis_dict,
             elif loss == 'true-lsq':
                 val = model.value_error(IM, weighting = weighting)
             else: print loss; assert False
-
+            
             d_loss[loss] = numpy.append(arr, val)
         return d_loss
     
@@ -316,18 +333,14 @@ def train_basis(d_run_params, basis_params, basis_dict,
     switch = [] # list of indices where a training method switch occurred
     it = 0
     
-    # train once on w to initialize
-    basis.set_loss('layered', ['w'])
-    basis.set_params(scipy.optimize.fmin_cg(
-            basis.loss, basis.flat_params, basis.grad,
-            args = (S, R, Mphi, Mrew),
-            full_output = False,
-            maxiter = max_iter,
-            ))
-    
-    # TODO keep?
-    IM = encoder.weights_to_basis(basis.thetas[-1])
-    d_loss_learning = record_loss(d_loss_learning)
+     #train once on w to initialize
+    #basis.set_loss('layered', ['w'])
+    #basis.set_params(scipy.optimize.fmin_cg(
+            #basis.loss, basis.flat_params, basis.grad,
+            #args = (S, R, Mphi, Mrew),
+            #full_output = False,
+            #maxiter = max_iter,
+            #))
 
     for loss, wrt in zip(loss_list, wrt_list):
         
@@ -342,7 +355,7 @@ def train_basis(d_run_params, basis_params, basis_dict,
         
         if 'w' in wrt_list: # initialize w to the lstd soln given the current basis
             logger.info('initializing w to lstd soln')
-            basis.params[-1] = BellmanBasis.lstd_weights(basis.encode(S), R, Mphi, Mrew)
+            basis.params[-1] = BellmanBasis.lstd_weights(basis.encode(S), R, Mphi, Mrew) # TODO change to iteration of opt on w?
         
         try:
             while (waiting < patience):
@@ -417,10 +430,6 @@ def train_basis(d_run_params, basis_params, basis_dict,
     if record_runs:
         
         # save results!
-        #ost = out_string(fl_dir+'sirf/output/pickle/learning/', 'learning_curve', d_run_params, '.pickle.gz')
-        #with util.openz(ost, "wb") as out_file:
-            #pickle.dump(d_loss_learning, out_file, protocol = -1)
-
         # plot basis functions
         plot_stacked_features(IM[:, :36])
         figst = out_string(fl_dir+'sirf/output/plots/learning/', 'basis_stacked', d_run_params, '.pdf')
