@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import collections
 import numpy as np
 import os
 import re
@@ -9,37 +10,38 @@ from matplotlib import pyplot as plt
 
 LOSSES = 'policy true-bellman test-bellman test-model test-reward'.split()
 
-
-def key(filename):
-    m = re.search(r'n(\d+)-(m\d)-(g[^-]+)-(k[\d,]+)', filename)
-    samples, method, nonlin, features = m.groups()
-    return '%05d %s %s %s' % (int(samples), method, nonlin, features)
+def loss(line):
+    m = re.search(r'n-(\d+) .* loss (\S+) ([.\d]+)$', line)
+    try:
+        samples, loss, value = m.groups()
+        return '%05d' % int(samples), loss, float(value)
+    except:
+        return '', '', 0.
 
 
 def extract(filename):
-    losses = dict((l, None) for l in LOSSES)
     with open(filename) as handle:
         for line in handle:
-            for l in losses:
-                if 'loss ' + l in line:
-                    losses[l] = float(line.strip().split()[-1])
-    return losses
+            yield loss(line)
+
+
+def key(filename):
+    return re.search(r'm(\d)-g([^-]+)-k([,\d]+)', filename).groups()
 
 
 def main(filenames):
-    db = {}
+    db = collections.defaultdict(list)
     for filename in filenames:
-        k = key(filename)
-        losses = extract(filename)
-        if k not in db:
-            db[k] = dict((k, [v]) for k, v in losses.iteritems())
-        else:
-            for l in LOSSES:
-                db[k][l].append(losses[l])
-    for k, losses in sorted(db.iteritems()):
-        for l, vs in losses.iteritems():
-            tv = [v for v in vs if v is not None]
-            print k, l, np.mean(tv), np.std(tv) / np.sqrt(len(tv))
+        localdb = {}
+        method, nonlin, features = key(filename)
+        for samples, loss, value in extract(filename):
+            if not loss: continue
+            k = method, nonlin, features, samples, loss
+            localdb[k] = value
+        for k, v in localdb.iteritems():
+            db[k].append(v)
+    for k, vs in sorted(db.iteritems()):
+        print '%s %s %s %s %s' % k, len(vs), np.mean(vs), np.std(vs) / np.sqrt(len(vs))
 
 
 if __name__ == '__main__':
