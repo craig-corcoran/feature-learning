@@ -23,16 +23,12 @@ from sirf.bellman_basis import plot_features, BellmanBasis
 from sirf.aggregate import out_string, reorder_columns
 from sirf.util import openz
 
-# set matplotlib to have small legends
 
 # mark best theta
 # init with datapoints
-# on policy learning with perfect info?
-# running until long convergence
 
 # vary: lambda, req_rew, encoding, nonlin, size, reg, shift, sample init, 
 #       convergence params, col normalization
-# policy distance metric
 # value prediction behaviour
 
 theano.gof.compilelock.set_lock_status(False)
@@ -47,11 +43,13 @@ logger = sirf.get_logger(__name__)
     encoding=('feature encoding used (tabular, tiled)', 'option', None, str),
     env_size=('size of the grid world', 'option', 's', int),
     n_runs=('number of runs to average performance over', 'option', None, int),
+    n_reward_samples=('number of samples taken during reward harvesting evalutation', 'option', None, int),
     lam=('lambda for TD-lambda training', 'option', None, float),
     gam=('discount factor', 'option', None, float),
     beta=('covariance loss parameter', 'option', None, float),
     alpha=('extra multiplier on reconstruction cost of rewards', 'option', None, float),
-    eps=('epsilon for computing TD-lambda horizon', 'option', None, float),
+    eta=('coefficient for laplacian regularization', 'option', None, float),
+    eps=('precision for computing TD-lambda horizon', 'option', None, float),
     patience=('train until patience runs out', 'option', None, int),
     max_iter=('train for at most this many iterations', 'option', 'i', int),
     l1theta=('regularize theta with this L1 parameter', 'option', None, float),
@@ -64,7 +62,6 @@ logger = sirf.get_logger(__name__)
     min_imp=('train until loss improvement percentage is less than this', 'option', None, float),
     min_delta=('train until change in parameters is less than this', 'option', None, float),
     fldir=('feature-learning directory that has sirf/ and output/ in it', 'option', None, str),
-    movie=('Boolean switch for recording movie of basis functions during learning', 'option', None, str),
     req_rew=('Boolean switch to require nonzero reward to be in the sample set when sampling', 'option', None, str),
     record_runs=('Boolean switch for recording learning curve plots and pickles at the end of each run', 'option', None, str),
     )
@@ -73,15 +70,17 @@ def main(workers = 0,
          encoding = 'tile',
          env_size = 9,
          n_runs = 1,
+         n_reward_samples = 1000,
          lam = 0.,
          gam = 0.995,
          beta = 0.995,
          alpha = 1.,
+         eta = 1.,
          eps = 1e-5, 
          patience = 15,
          max_iter = 8, 
          l1theta = None,
-         l1code = 0.0002,
+         l1code = None,
          l2code = None,
          n_samples = None,
          nonlin = None,
@@ -90,7 +89,6 @@ def main(workers = 0,
          min_imp = 0.0002,
          min_delta = 1e-6,
          fldir = '/scratch/cluster/ccor/feature-learning/',
-         movie = False,
          req_rew = True,
          record_runs = True,
          ):
@@ -102,27 +100,29 @@ def main(workers = 0,
     # append reward to basis when using perfect info?
     if training_methods is None:
         training_methods = [
-            (['covariance', 'prediction', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all'],['theta-all','w']]),
-            (['prediction', 'value_prediction', 'layered'],[['theta-all'],['theta-all'],['theta-all','w']]),
-            (['value_prediction'],[['theta-all']]),
-            (['value_prediction', 'layered'],[['theta-all'],['theta-all','w']]),
-            (['prediction'],[['theta-all']]),
-            (['prediction', 'layered'], [['theta-all'],['theta-all','w']]),
-            (['covariance'], [['theta-all']]),
-            (['covariance', 'layered'], [['theta-all'],['theta-all','w']]),
-            (['layered'], [['theta-all', 'w']]), # baseline
+            #(['covariance', 'prediction', 'value_prediction', 'bellman'],[['theta-all'],['theta-all'],['theta-all'],['theta-all','w']]),
+            #(['prediction', 'value_prediction', 'bellman'],[['theta-all'],['theta-all'],['theta-all','w']]),
+            #(['value_prediction'],[['theta-all']]),
+            #(['value_prediction', 'bellman'],[['theta-all'],['theta-all','w']]),
+            #(['prediction'],[['theta-all']]),
+            #(['prediction', 'bellman'], [['theta-all'],['theta-all','w']]),
+            #(['covariance'], [['theta-all']]),
+            (['covariance', 'bellman'], [['theta-all'],['theta-all','w']]),
+            (['full_laplacian'], [['theta-all', 'w']]), 
+            (['laplacian'], [['theta-all', 'w']]), 
+            (['bellman'], [['theta-all', 'w']]), # baseline
             ]  
 
-    losses = ['test-bellman', 'test-reward',  'test-model', 'test-fullmodel', # test-training
-              'true-bellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] \
+    losses = ['test-lsbellman', 'test-reward',  'test-model', 'test-fullmodel', # test-training
+              'true-bellman', 'true-lsbellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] \
                 if n_samples else \
              ['true-bellman', 'true-reward', 'true-model', 'true-fullmodel', 'true-lsq'] 
 
     logger.info('building environment of size %i' % env_size)
     mdp = grid_world.MDP(walls_on = True, size = env_size)
+    env = mdp.env
     n_states = env_size**2
-
-    m = Model(mdp.env.R, mdp.env.P, gam = gam)
+    m = Model(mdp.R, mdp.P, gam = gam)
     
     # create raw data encoder (constant appended in encoder by default)
     if encoding is 'tabular':
@@ -171,12 +171,8 @@ def main(workers = 0,
         weighting = 'uniform'
 
         return (X, X_val, X_test), (R, R_val, R_test), weighting
-    
-    #run_path = fldir + 'sirf/output/pickle/runs/'
-    #logger.info('removing old run data from %s' % run_path)
-    #os.system("rm %s*.pickle.gz" % (run_path))
 
-    logger.info('constructing basis')
+    
     reg = None
     if l1theta is not None:
         reg = ('l1theta', l1theta)
@@ -186,7 +182,7 @@ def main(workers = 0,
         reg = ('l2code', l2code)
 
     run_param_keys = ['k','method','encoding','samples','size','weighting',
-                      'lambda','gamma','alpha','regularization','nonlinear']
+                      'lambda','gamma','alpha', 'eta', 'regularization','nonlinear']
     def yield_jobs(): 
         
         for i,n in enumerate(n_samples or [n_states]):
@@ -218,17 +214,18 @@ def main(workers = 0,
                     loss_list, wrt_list = tm
                     assert len(loss_list) == len(wrt_list)
                     
-                    run_param_values = [k, tm, encoder, n, env_size, weighting, lam, gam, alpha, 
-                              reg[0]+str(reg[1]) if reg else 'None',
-                              nonlin if nonlin else 'None'] # TODO what should empty string be?
+                    run_param_values = [k, tm, encoder, n, env_size, weighting, 
+                                lam, gam, alpha, eta, 
+                                reg[0]+str(reg[1]) if reg else 'None',
+                                nonlin if nonlin else 'None']
 
                     d_run_params = dict(izip(run_param_keys, run_param_values))
                      
                     yield (train_basis,[d_run_params, bb_params, bb_dict,
-                                        m, losses, # model and loss list
+                                        env, m, losses, # environment, model and loss list
                                         X_data, R_data, Mphi, Mrew, # training data
                                         max_iter, patience, min_imp, min_delta, # optimization params 
-                                        fldir, movie, record_runs]) # recording params
+                                        fldir, record_runs]) # recording params
     # create output file path
     date_str = time.strftime('%y%m%d.%X').replace(':','')
     out_dir = fldir + 'sirf/output/'
@@ -251,13 +248,20 @@ def main(workers = 0,
         for (_, out) in condor.do(yield_jobs(), workers):
             keys, vals = out
             assert (keys == col_keys_array).all() # todo catch
-            writer.writerow(vals) 
+            writer.writerow(vals)
+
+def sample_policy_reward(env, v):
+        
+        curr_policy = ValueGreedyPolicy(env, v)
+        mmdp = grid_world.MDP(env, curr_policy, walls_on = True, size = env_size)
+        r, _, _ = mmdp.sample_policy(n_reward_samples)
+        return numpy.sum(r)
 
 def train_basis(d_run_params, basis_params, basis_dict, 
-                model, losses, 
+                env, model, losses, 
                 S_data, R_data, Mphi, Mrew, 
                 max_iter, patience, min_imp, min_delta, 
-                fl_dir, movie, record_runs):
+                fl_dir, record_runs):
 
     method, weighting, encoder, env_size = map(lambda x: d_run_params[x], 
                                       'method weighting encoding size'.split())
@@ -272,24 +276,25 @@ def train_basis(d_run_params, basis_params, basis_dict,
     d_loss_learning = {}
     for key in losses:
         d_loss_learning[key] = numpy.array([])
-    
-    if movie:
-        logger.info('clearing movie directory of pngs')
-        movie_path = fl_dir + 'sirf/output/plots/learning/movie/'
-        os.system("rm %s*.png" % (movie_path)) 
-    
+     
     loss_list, wrt_list = method
     assert len(loss_list) == len(wrt_list)
+
+    logger.info('constructing bellman basis')
     basis = BellmanBasis(*basis_params, **basis_dict)
     
     def record_loss(d_loss):
 
         # record losses with test set
         for loss, arr in d_loss.items():
-            if loss == 'test-training':
+            if loss == 'sample-reward':
+                val = sample_policy_reward(env, basis.estimated_value(encoder.B))
+            elif loss == 'test-training':
                 val = basis.loss(basis.flat_params, S_test, R_test, Mphi, Mrew) / n_rows
             elif loss == 'test-bellman':
                 val = basis.loss_be(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
+            elif loss == 'test-lsbellman':
+                val = basis.loss_lsbe(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'test-reward':
                 val = basis.loss_r(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'test-model':
@@ -297,27 +302,27 @@ def train_basis(d_run_params, basis_params, basis_dict,
             elif loss == 'test-fullmodel':
                 val = basis.loss_fm(*(basis.params + [S_test, R_test, Mphi, Mrew])) / n_rows
             elif loss == 'true-bellman':
-                val = model.bellman_error(IM, weighting = weighting)
+                val = model.bellman_error(Bs, w = basis.params[-1], weighting = weighting)
+            elif loss == 'true-lsbellman':
+                val = model.bellman_error(Bs, weighting = weighting)
             elif loss == 'true-reward':
-                val = model.reward_error(IM, weighting = weighting)
+                val = model.reward_error(Bs, weighting = weighting)
             elif loss == 'true-model':
-                val = model.model_error(IM, weighting = weighting)
+                val = model.model_error(Bs, weighting = weighting)
             elif loss == 'true-fullmodel':
-                val = model.fullmodel_error(IM, weighting = weighting)
+                val = model.fullmodel_error(Bs, weighting = weighting)
             elif loss == 'true-lsq':
-                val = model.value_error(IM, weighting = weighting)
+                val = model.value_error(Bs, weighting = weighting)
             else: print loss; assert False
 
             d_loss[loss] = numpy.append(arr, val)
         return d_loss
     
-    vmin = -0.25
-    vmax = 0.25
     switch = [] # list of indices where a training method switch occurred
     it = 0
     
     # train once on w to initialize
-    basis.set_loss('layered', ['w'])
+    basis.set_loss('bellman', ['w'])
     basis.set_params(scipy.optimize.fmin_cg(
             basis.loss, basis.flat_params, basis.grad,
             args = (S, R, Mphi, Mrew),
@@ -327,6 +332,9 @@ def train_basis(d_run_params, basis_params, basis_dict,
     
     # TODO keep?
     IM = encoder.weights_to_basis(basis.thetas[-1])
+    Bs = basis.encode(encoder.B)
+    if len(basis.thetas) == 1:
+        assert (IM == Bs).all()
     d_loss_learning = record_loss(d_loss_learning)
 
     for loss, wrt in zip(loss_list, wrt_list):
@@ -334,11 +342,6 @@ def train_basis(d_run_params, basis_params, basis_dict,
         waiting = 0
         best_params = None
         best_test_loss = 1e20
-        
-        if movie:
-            # save a blank frame before/between training losses
-            plot_features(numpy.zeros_like(basis.thetas[-1][:-1]), vmin = vmin, vmax = vmax)
-            plt.savefig(fl_dir + 'sirf/output/plots/learning/movie/img_%03d.png' % it)
         
         if 'w' in wrt_list: # initialize w to the lstd soln given the current basis
             logger.info('initializing w to lstd soln')
@@ -349,13 +352,8 @@ def train_basis(d_run_params, basis_params, basis_dict,
                 it += 1
                 logger.info('*** iteration ' + str(it) + '***')
                 
-                if movie:
-                    # record learning movie frame
-                    plot_features(basis.thetas[-1][:-1], vmin = vmin, vmax = vmax)
-                    plt.savefig(fl_dir + 'sirf/output/plots/learning/movie/img_%03d.png' % it)
-
                 old_params = copy.deepcopy(basis.flat_params)
-                for loss_, wrt_ in ((loss, wrt), ('layered', ['w'])):
+                for loss_, wrt_ in ((loss, wrt), ('bellman', ['w'])):
                     basis.set_loss(loss_, wrt_)
                     basis.set_params(scipy.optimize.fmin_cg(
                             basis.loss, basis.flat_params, basis.grad,
@@ -363,7 +361,7 @@ def train_basis(d_run_params, basis_params, basis_dict,
                             full_output = False,
                             maxiter = max_iter,
                             ))
-                basis.set_loss(loss, wrt) # reset loss back from layered
+                basis.set_loss(loss, wrt) # reset loss back from bellman
                  
                 delta = numpy.linalg.norm(old_params-basis.flat_params)
                 logger.info('delta theta: %.2f' % delta)
@@ -391,12 +389,8 @@ def train_basis(d_run_params, basis_params, basis_dict,
                     waiting += 1
                     logger.info('iters without better %s loss: %i' % (basis.loss_type, int(waiting)))
 
-                # check reward loss gradient
-                #print 'norm of reward prediction gradient: ', numpy.linalg.norm(
-                    #basis.grad_rew_pred(basis.flat_params, S, R, Mphi, Mrew))
-                IM = encoder.weights_to_basis(basis.thetas[-1])
+                Bs = basis.encode(encoder.B)
                 d_loss_learning = record_loss(d_loss_learning)
-
 
         except KeyboardInterrupt:
             logger.info( '\n user stopped current training loop')
@@ -406,14 +400,15 @@ def train_basis(d_run_params, basis_params, basis_dict,
         switch.append(it-1)
     
     sparse_eps = 1e-5
-    IM = encoder.weights_to_basis(basis.thetas[-1])
+    Bs = basis.encode(encoder.B)
     d_loss_learning = record_loss(d_loss_learning)
-    logger.info( 'final test bellman error: %.2f' % model.bellman_error(IM, weighting = weighting))
+    logger.info( 'final test bellman error: %.2f' % model.bellman_error(Bs, weighting = weighting))
     logger.info( 'final sparsity: ' + str( [(numpy.sum(abs(th) < sparse_eps) / float(len(th.flatten()))) for th in basis.params]))
 
     # edit d_run_params to not include wrt list in method
     d_run_params['method'] = '-'.join(d_run_params['method'][0])
-
+    
+    # TODO change to output log file and plot afterwards
     if record_runs:
         
         # save results!
@@ -422,12 +417,12 @@ def train_basis(d_run_params, basis_params, basis_dict,
             #pickle.dump(d_loss_learning, out_file, protocol = -1)
 
         # plot basis functions
-        plot_stacked_features(IM[:, :36])
+        plot_stacked_features(Bs[:, :36])
         figst = out_string(fl_dir+'sirf/output/plots/learning/', 'basis_stacked', d_run_params, '.pdf')
         plt.savefig(figst)
 
         # plot the basis functions again!
-        plot_features(IM)
+        plot_features(Bs)
         figst = out_string(fl_dir+'sirf/output/plots/learning/', 'basis_all', d_run_params, '.pdf')
         plt.savefig(figst)
         
@@ -440,11 +435,11 @@ def train_basis(d_run_params, basis_params, basis_dict,
             plt.savefig(out_string(fl_dir+'sirf/output/plots/learning/', 'true_loss', d_run_params, '.pdf'))        
         
         # plot value functions
-        plot_value_functions(env_size, model, IM)
+        plot_value_functions(env_size, model, Bs)
         plt.savefig(out_string(fl_dir+'sirf/output/plots/learning/', 'value_funcs', d_run_params, '.pdf'))
 
         # plot spectrum of reward and features
-        gen_spectrum(IM, model.P, model.R)
+        gen_spectrum(Bs, model.P, model.R)
         plt.savefig(out_string(fl_dir+'sirf/output/plots/learning/', 'spectrum', d_run_params, '.pdf'))
     
     d_loss_batch = dict(izip(d_loss_learning.keys(), map(lambda x: x[-1], 

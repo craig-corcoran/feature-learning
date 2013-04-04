@@ -81,13 +81,12 @@ class GridWorld:
 
             idx = self.state_to_index(state)
             adj_ids = map(self.state_to_index, adj_set)
-            #P[adj_ids,idx] = 1.
             P[idx, adj_ids] = 1.
 
         # normalize rows? to have unit sum
         self.P = numpy.dot(numpy.diag(1./(numpy.sum(P, axis=1)+1e-14)), P)
         
-        # TODO should R, P be sparse vectors? - corresponding changes in dbel.model
+        # TODO should R, P be sparse?
 
         # build reward function R
         self.R = numpy.zeros(self.n_states)
@@ -186,15 +185,11 @@ class RandomPolicy:
     def choose_action(self, actions):
         return choice(list(actions))
 
-class OptimalPolicy:
-    ''' acts according to the value function of a random agent - should be 
-    sufficient in grid world'''
-
-    def __init__(self, env, m):
-        self.env = env
-        self.m = m
-        self.v = m.V
+class ValueGreedyPolicy:
     
+    def __init__(self, env, v):
+        self.env = env
+        self.v = v
 
     def choose_action(self, actions):
         
@@ -210,6 +205,14 @@ class OptimalPolicy:
         assert act is not None
 
         return act
+
+class OptimalPolicy(ValueGreedyPolicy):
+    ''' acts according to the value function of a random agent - should be 
+    sufficient in grid world'''
+
+    def __init__(self, env, m):
+        self.env = env
+        self.v = m.V
 
 class MDP:
     
@@ -232,6 +235,14 @@ class MDP:
         if policy is None:
             self.policy = RandomPolicy()
     
+    @property
+    def P(self):
+        return self.env.P
+
+    @property
+    def R(self):
+        return self.env.R
+
     @property
     def n_states(self):
         return self.env.n_states
