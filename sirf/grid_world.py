@@ -81,13 +81,12 @@ class GridWorld:
 
             idx = self.state_to_index(state)
             adj_ids = map(self.state_to_index, adj_set)
-            #P[adj_ids,idx] = 1.
             P[idx, adj_ids] = 1.
 
         # normalize rows? to have unit sum
         self.P = numpy.dot(numpy.diag(1./(numpy.sum(P, axis=1)+1e-14)), P)
         
-        # TODO should R, P be sparse vectors? - corresponding changes in dbel.model
+        # TODO should R, P be sparse?
 
         # build reward function R
         self.R = numpy.zeros(self.n_states)
@@ -111,9 +110,7 @@ class GridWorld:
                 delta = numpy.linalg.norm(v-v_old)
 
             self.D = scipy.sparse.csc_matrix(numpy.diag(v[:,0]))
-
             
-
     def _check_valid_state(self, pos):
         ''' Check if position is in bounds and not in a wall. '''
         if pos is not None:
@@ -172,11 +169,12 @@ class GridWorld:
     def state_to_index(self, state):
         return state[0] * self.n_cols + state[1]
 
-    def random_state(self):
+    def random_state(self, seed = None):
 
         r_state = None
+        rgen = numpy.random.RandomState(seed)
         while not self._check_valid_state(r_state):
-            r_state = numpy.round(numpy.random.random(2) * self.walls.shape)\
+            r_state = numpy.round(rgen.uniform(size = 2) * self.walls.shape)\
                         .astype(numpy.int)
         
         return r_state
@@ -186,15 +184,11 @@ class RandomPolicy:
     def choose_action(self, actions):
         return choice(list(actions))
 
-class OptimalPolicy:
-    ''' acts according to the value function of a random agent - should be 
-    sufficient in grid world'''
-
-    def __init__(self, env, m):
-        self.env = env
-        self.m = m
-        self.v = m.V
+class ValueGreedyPolicy:
     
+    def __init__(self, env, v):
+        self.env = env
+        self.v = v
 
     def choose_action(self, actions):
         
@@ -210,6 +204,14 @@ class OptimalPolicy:
         assert act is not None
 
         return act
+
+class OptimalPolicy(ValueGreedyPolicy):
+    ''' acts according to the value function of a random agent - should be 
+    sufficient in grid world'''
+
+    def __init__(self, env, m):
+        self.env = env
+        self.v = m.V
 
 class MDP:
     
@@ -232,6 +234,14 @@ class MDP:
         if policy is None:
             self.policy = RandomPolicy()
     
+    @property
+    def P(self):
+        return self.env.P
+
+    @property
+    def R(self):
+        return self.env.R
+
     @property
     def n_states(self):
         return self.env.n_states

@@ -100,8 +100,10 @@ class Model:
         
         A = (PHI - numpy.dot(self.Plam, PHI))
         # diagonal weight matrix
+
         D = numpy.diag(self.mu) if weighting is 'policy' else numpy.eye(PHI.shape[0])
         return numpy.linalg.norm(numpy.dot(D, (self.R - numpy.dot(A, w))))
+
 
     def fullmodel_error(self, PHI, W = None, weighting = 'uniform'):
         
@@ -137,7 +139,7 @@ class Model:
         a = numpy.linalg.norm(numpy.dot(D, (numpy.dot(PHI, w) - self.R)))
         return a
 
-    def value_error(self, PHI, w = None, weighting = 'uniform'):
+    def lsq_error(self, PHI, w = None, weighting = 'uniform'):
 
         if PHI.ndim == 1:
             PHI = PHI[:,None]

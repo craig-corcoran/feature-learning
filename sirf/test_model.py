@@ -22,6 +22,23 @@ def main(gam = 0.):
     #plot_features(numpy.imag(v))
     #plt.show()
 
+def gen_spectrum():
+
+    mdp = grid_world.MDP(walls_on = True)    
+    #mdp.policy = OptimalPolicy(mdp.env, m)
+    m = Model(mdp.env.R, mdp.env.P) 
+    inp = m.R
+    
+    #beta = 1./gam
+    w,v = numpy.linalg.eig( m.P )#- beta * numpy.eye(m.P.shape[0]))
+    v = v[:, numpy.argsort(abs(w))]
+    v = numpy.real(v)
+
+    out = abs(numpy.dot(inp, v))
+    plt.plot(range(len(out)), out, 'bo')
+    plt.show()
+    
+
 def simultaneous_iteration(k = 16, eps = 1e-8, lr = 1e-3):
     mdp = grid_world.MDP(walls_on = True)    
     m = Model(mdp.env.R, mdp.env.P)
@@ -230,7 +247,8 @@ def test_si_basis(n = 81, k = 16, patience = 1, gam = 1-1e-4,
 
 
 if __name__ == '__main__':
+    gen_spectrum()
     #simultaneous_iteration()
     #test_si_basis()
-    main()
+    #main()
     
