@@ -13,6 +13,102 @@ theano.config.on_unused_input = 'ignore'
 
 logger = sirf.get_logger(__name__)
 
+# add method for setting mixing weights according to bellman gradient - only positive weights? how to initialize?
+# add tests for new bases
+# create environment object
+# toy smoothness example - can we avoid local minima
+
+
+class PredictionBasis(BellmanBasis):
+        
+    def __init__(self, n, ks, thetas = None, w = None, 
+                 reg_tuple = None, nonlin = None, 
+                 losses = None, gradients = None,
+                 mixing_weights = (1., 1., 1.)):
+        
+        super(PredictionBasis, self).__init__(self, n, ks, thetas, w, 
+                                            reg_tuple, nonlin, 
+                                            losses, gradients)
+
+        self.mix_wts_t = theano.shared(numpy.array(mixing_weights, dtype = numpy.float64))
+
+        # Thetas U V q w 
+        self.param_names = ['theta-%d' % i for i in range(len(ks))] + ['U', 'V', 'q', 'w']
+        self.params_t = [TT.dmatrix(n) for n in self.param_names]
+    
+    @property
+    def shapes(self):
+        return zip([self.n] + self.ks + [self.k]*3, self.ks + [self.k, self.n] + [1]*2)
+
+    @property
+    def U(self):
+        return self.params[-4]
+
+    @property
+    def U_t(self):
+        return self.params_t[-4]
+
+    @property
+    def V(self):
+        return self.params[-3]
+
+    @property
+    def V_t(self):
+        return self.params_t[-3]
+
+    @property
+    def q(self):
+        return self.params[-2]
+
+    @property
+    def q_t(self):
+        return self.params_t[-2]
+
+    @property
+    def thetas(self):
+        return self.params[:-4]
+
+    @property
+    def thetas_t(self):
+        return self.params_t[:-4]
+    
+    # TODO want (tied) reconstruction_calc
+
+    def prediction_calc(self):
+        return (self.mix_wts_t[0] * self.raw_prediction_calc() +
+                self.mix_wts_t[1] * self.state_prediction_calc() + 
+                self.mix_wts_t[2] * self.reward_prediction_calc())
+
+    def tied_prediction_calc(self):
+        return (self.mix_wts_t[0] * self.tied_raw_prediction_calc() +
+                self.mix_wts_t[1] * self.state_prediction_calc() + 
+                self.mix_wts_t[2] * self.reward_prediction_calc())
+
+    def state_prediction_calc(self):
+        # || Phi(X) U - Phi(X') ||, U is k(+1) by k
+        return TT.sum(TT.abs_( TT.dot(self.PHI0_t, self.U_t ) - self.PHIlam_t))
+
+    def reward_prediction_calc(self):
+        # || Phi(X) q - Rlam ||, q is k(+1) by 1
+        return TT.sum(TT.abs_( TT.dot(self.PHI0_t, self.q_t ) - self.PHIlam_t))
+
+    def raw_prediction_calc(self):
+        # || Phi(X) V - X' ||, V is k(+1) by n
+        return TT.sum(TT.abs_( TT.dot(self.PHI0_t, self.V_t ) - self.Slam_t)) # TODO need Slam_t
+
+    def tied_raw_prediction_calc(self):
+        # || decode(encode(X)) - X' ||
+        return TT.sum(TT.abs_(self.decode(self.PHI0_t) - self.Slam_t))
+
+    def raw_reconstruction_calc(self):
+        # || Phi(X) V - X ||
+        return TT.sum(TT.abs_( TS.sub(self.S0_t, TT.dot(self.PHI0_t, self.V_t))))
+
+    def tied_raw_reconstruction_calc(self):
+        # || decode(encode(X)) - X ||
+        return TT.sum(TT.abs_(TS.sub(self.S0_t, self.decode(self.PHI0_t))))
+
+
 
 class BellmanBasis(object):
 
@@ -36,10 +132,11 @@ class BellmanBasis(object):
                 a,b = self.shapes[i]
                 assert theta.shape == (a+1, b)
         params.extend(thetas)
-
+        
+        # XXX fold w into initialization above
         if w is None:
             w = numpy.random.randn(self.k + 1, 1)
-            w = w / numpy.linalg.norm(w)
+            #w = w / numpy.linalg.norm(w)
         else:
             assert w.shape == (self.k + 1, ) or w.shape == (self.k + 1, 1)
         params.append(w)
@@ -49,7 +146,7 @@ class BellmanBasis(object):
         self.param_names = ['theta-%d' % i for i in range(len(thetas))] + ['w']
         self.params_t = [TT.dmatrix(n) for n in self.param_names]
 
-        self.S_t = TS.csr_matrix('S')
+        self.Sfull_t = TS.csr_matrix('S')
         self.Rfull_t = TS.csr_matrix('R')
         self.Mphi_t = TT.dmatrix('Mphi') # mixing matrix for PHI_lam
         self.Mrew_t = TT.dmatrix('Mrew') # mixing matrix for reward_lambda
@@ -60,18 +157,17 @@ class BellmanBasis(object):
         sigmoid_t = lambda z: 1. / (1 + TT.exp(-z))
         sigmoid = lambda z: 1. / (1 + numpy.exp(-z))
         ident = lambda z: z
-        g, self.nonlin = dict(
+        self.nonlin_t, self.nonlin = dict(
             sigmoid=(sigmoid_t, sigmoid),
             relu=(relu_t, relu)
             ).get(nonlin, (ident, ident))
 
         # encode s and mix lambda components
-        z = g(TS.structured_dot(self.S_t, self.thetas_t[0]))
-        for t in self.thetas_t[1:]:
-            z = g(TT.dot(self.stack_bias(z), t))
-        self.PHI_full_t = z
-        # 'c' appended to variable name implies constant bias column appended
+        self.PHI_full_t = self.encode(self.S_t) 
+        self.S0_t = self.Sfull_t[:self.MPhi_t.shape[0],:] # still sparse?
+        self.Slam_t = TS.structured_dot(self.Sfull_t.T, self.Mphi_t.T).T
         self.Rlam_t = TS.structured_dot(self.Rfull_t.T, self.Mrew_t.T).T
+        # 'c' appended to variable name implies constant bias column appended
         self.PHIlam_t = TT.dot(self.Mphi_t, self.PHI_full_t)
         self.PHIlamc_t = self.stack_bias(self.PHIlam_t)
         self.PHI0_t = self.PHI_full_t[:self.PHIlam_t.shape[0],:]
@@ -111,8 +207,14 @@ class BellmanBasis(object):
         
 
     @staticmethod
-    def stack_bias(x):
+    def stack_bias_t(x): # TODO make sparse matrix compatible
         return TT.concatenate([x, TT.ones((x.shape[0], 1))], axis = 1)
+
+    @staticmethod
+    def stack_bias(x): # TODO make sparse matrix compatible
+        if len(x.shape) == 1:
+            x = x.reshape((1, len(x)))
+        return numpy.hstack([x, numpy.ones((len(x), 1))]) # what if S is sparse? xxx
 
     @property
     def k(self):
@@ -169,17 +271,32 @@ class BellmanBasis(object):
             z = numpy.append(z, p.flatten())
         return z
 
-    def encode(self, S, add_bias = True):
-        def bias(z):
-            if len(z.shape) == 1:
-                z = z.reshape((1, len(z)))
-            return numpy.hstack([z, numpy.ones((len(z), 1))]) # what if S is sparse? xxx
+    def decode_t(self, PHI0_t):
+        z = PHI0_t
+        for t in self.thetas_t[::-1][:-1]: # all but the first layer
+            z = self.nonlin_t(TT.dot(z, t.T)[:, :-1]) # remove bias activation column
+        return TT.dot(z, self.thetas_t[0].T)[:, :-1] # returns result w/o bias
+
+    def decode(self, PHI0):
+        z = PHI0
+        for t in self.thetas[::-1][:-1]: # all but the first layer
+            z = self.nonlin(numpy.dot(z, t.T)[:, :-1]) # remove bias activation column
+        return numpy.dot(z, self.thetas[0].T)[:, :-1] # returns result w/o bias
+
+    def encode_t(self, S_t):
+        # assumes input S_t is sparse and already includes a bias column
+        z = self.nonlin_t(TS.structured_dot(self.S_t, self.thetas_t[0])) 
+        for t in self.thetas_t[1:]:
+            z = self.nonlin_t(TT.dot(self.stack_bias(z), t))
+        return z
+
+    def encode(self, S):
         if sp.issparse(S):
-            S = S.todense()
-        z = numpy.asarray(S)
-        for i, t in enumerate(self.thetas):
-            if add_bias:
-                z = bias(z)
+            z = self.nonlin(sp.dot(S, self.thetas[0]))
+        else:
+            z = self.nonlin(numpy.dot(S, self.thetas[0]))
+        for t in self.thetas[1:]:
+            z = self.stack_bias(z)
             z = self.nonlin(numpy.dot(z, t))
         return z
 
@@ -222,10 +339,11 @@ class BellmanBasis(object):
         if reg_tuple is not None:
             self.reg_type, self.reg_param = reg_tuple
 
-    def set_loss(self, loss_type, wrt): # XXX remove wrt
+    def set_loss(self, loss_type, wrt = 'all'):
         self.loss_type = loss_type
         self.wrt = wrt
-        self.loss_func, self.loss_grads = self.losses[loss_type]
+        self.loss_func, _ = self.losses[loss_type]
+        self.loss_grads = self.gradients[loss_type]
 
     def l2code_calc(self):
         return TT.sqrt(TT.sum(TT.sqr(self.PHI_full_t)))
@@ -283,11 +401,12 @@ class BellmanBasis(object):
         grad = numpy.zeros_like(vec)
         o = 0
         for i, (var, (a, b)) in enumerate(zip(self.param_names, self.shapes)):
-            sl = slice(o, o + (a + 1) * b)
-            grad[sl] += self.loss_grads[i](*args).flatten()
-            if self.reg_type: 
-                reg_grad = self.gradients[self.reg_type]
-                grad[sl] += self.reg_param * reg_grad[i](*args).flatten()
+            if (var == self.wrt) or (self.wrt == 'all'):
+                sl = slice(o, o + (a + 1) * b)
+                grad[sl] += self.loss_grads[i](*args).flatten()
+                if self.reg_type: 
+                    reg_grad = self.gradients[self.reg_type]
+                    grad[sl] += self.reg_param * reg_grad[i](*args).flatten()
             o += (a + 1) * b
 
         return grad / S.shape[0]
@@ -366,11 +485,11 @@ class KrylovBasis(BellmanBasis):
         self.ReWt_t = TS.square_diagonal(theano.shared(wvec))
         self.Z_t = TT.concatenate([self.Rlam_t, self.PHIlam_t], axis=1)
 
-        super(LaplacianBasis, self).__init__(self, n, ks, thetas, w, 
+        super(KrylovBasis, self).__init__(self, n, ks, thetas, w, 
                                             reg_tuple, nonlin, 
                                             losses, gradients)
     
-    def prediction_calc(self, norm_cols = True):
+    def krylov_calc(self, norm_cols = True):
         # next-step feature loss: || PHI0 PHI0.T Z - Z || where Z = [ R | PHIlam ]
         
         if norm_cols: 
@@ -382,7 +501,7 @@ class KrylovBasis(BellmanBasis):
         B = TS.structured_dot(self.ReWt_t, A.T).T
         return TT.sqrt(TT.sum(TT.sqr(B))) # frobenius norm
 
-    def value_prediction_calc(self, norm_cols = False):
+    def value_krylov_calc(self, norm_cols = False):
         
         q = TT.dot(self.PHIlamc_t, self.w_t)
         r = self.Rlam_t
@@ -395,7 +514,7 @@ class KrylovBasis(BellmanBasis):
         return TT.sum(TT.abs_(q_err)) + TT.sum(TT.abs_(r_err)) # currently no relative weighting
 
     
-    def rew_prediction_calc(self, norm_cols = True):
+    def reward_krylov_calc(self, norm_cols = True):
         if norm_cols:
             r = TT.true_div(self.Rlam_t,  TT.sqrt(TT.sum(TT.sqr(self.Rlam_t), axis=0)))
         else:
